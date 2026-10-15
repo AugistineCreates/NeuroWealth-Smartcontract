@@ -17,8 +17,7 @@ import assert from 'node:assert';
 
 // We import the module under test first, then replace the properties on the
 // live `server` object so all subsequent calls go through our stubs.
-import { startEventListener, stopEventListener, server } from './eventListener';
-import { getPool } from './db';
+import { startEventListener, stopEventListener, server, pool } from './eventListener';
 
 // ---------------------------------------------------------------------------
 // Stub state – all tests share these, reset in beforeEach
@@ -60,10 +59,9 @@ serverAny.getEvents = async (_req: unknown) => {
   return eventsResponse;
 };
 
-// Patch the pool so DB queries don't fail. `pool` is a read-through proxy,
-// so patch the live instance behind it.
+// Patch the pool so DB queries don't fail
 const dbQueries: string[] = [];
-const poolAny = getPool() as unknown as Record<string, unknown>;
+const poolAny = pool as unknown as Record<string, unknown>;
 poolAny.query = async (sql: string, _values?: unknown[]) => {
   dbQueries.push(sql);
   return { rows: [] };
