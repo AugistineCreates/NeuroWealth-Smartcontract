@@ -486,6 +486,8 @@ pub enum DataKey {
     PendingUpgradeHash,
     /// Ledger sequence at which the pending upgrade becomes executable (#316).
     UpgradeTimelockExpiry,
+    /// Pending migration target and the ledger it becomes executable at (#969).
+    PendingMigrationTarget,
     /// Owner-configurable circuit-breaker threshold (#439).
     ///
     /// The number of consecutive failed rebalances that trips an automatic
@@ -517,7 +519,7 @@ pub enum DataKey {
     MigrationPaused,
     /// User's locked shares (key: user Address) (#636).
     ///
-    /// Number of shares locked by the user for boosted APY. Locked shares
+    /// Number of shares locked by the user. Locked shares
     /// cannot be withdrawn until the lock period expires.
     LockedShares(Address),
     /// Latest ML-model APY prediction for a given protocol (#650).
@@ -1758,7 +1760,7 @@ pub struct SharesMigratedEvent {
     pub assets_transferred: i128,
 }
 
-/// Emitted when the owner sets or updates the migration target vault (#637).
+/// Emitted when a scheduled migration target change is executed (#637, #969).
 ///
 /// # Topics
 /// - `SymbolShort("mig_tgt")` (`TOPIC_MIGRATION_TARGET_UPDATED`) - Event identifier
@@ -1769,6 +1771,32 @@ pub struct MigrationTargetUpdatedEvent {
     /// New migration target address
     pub new_target: Address,
     /// Owner who triggered the change
+    pub owner: Address,
+}
+
+/// Emitted when the owner schedules a migration target change (#969).
+///
+/// # Topics
+/// - `SymbolShort("mig_sched")` (`TOPIC_MIGRATION_TARGET_SCHEDULED`) - Event identifier
+#[contracttype]
+pub struct MigrationTargetScheduledEvent {
+    /// Address that will become the migration target once executed
+    pub new_target: Address,
+    /// Ledger at which `execute_migration_target()` becomes callable
+    pub effective_ledger: u32,
+    /// Owner who scheduled the change
+    pub owner: Address,
+}
+
+/// Emitted when the owner cancels a pending migration target change (#969).
+///
+/// # Topics
+/// - `SymbolShort("mig_cncl")` (`TOPIC_MIGRATION_TARGET_CANCELLED`) - Event identifier
+#[contracttype]
+pub struct MigrationTargetCancelledEvent {
+    /// Address whose pending change was cancelled
+    pub cancelled_target: Address,
+    /// Owner who cancelled the change
     pub owner: Address,
 }
 
@@ -1784,7 +1812,7 @@ pub struct MigrationPausedEvent {
     pub owner: Address,
 }
 
-/// Emitted when a user locks their shares for boosted APY (#636).
+/// Emitted when a user locks their shares (#636).
 ///
 /// # Topics
 /// - `SymbolShort("lock")` (`TOPIC_SHARES_LOCKED`) - Event identifier
@@ -1797,8 +1825,6 @@ pub struct SharesLockedEvent {
     pub shares_locked: i128,
     /// Lock duration in days
     pub lock_duration_days: u32,
-    /// Boost multiplier applied (e.g., 1.1x, 1.25x, 1.5x)
-    pub boost_multiplier: u32,
     /// Ledger when lock expires
     pub expiry_ledger: u32,
 }
@@ -2091,6 +2117,11 @@ const AGENT_TIMELOCK_LEDGERS: u32 = 17_280;
 /// upgrade proposal (and to `cancel_upgrade`) before new WASM takes effect.
 const UPGRADE_TIMELOCK_LEDGERS: u32 = 17_280;
 
+/// Number of ledgers a migration target change must wait between
+/// `schedule_migration_target` and `execute_migration_target` (#969). Matches the
+/// upgrade timelock because the target controls where `migrate_shares` sends funds.
+const MIGRATION_TARGET_TIMELOCK_LEDGERS: u32 = UPGRADE_TIMELOCK_LEDGERS;
+
 /// Rate-limit category for single and batched deposits.
 ///
 /// The category symbols are part of the public API used by `set_rate_limit`.
@@ -2141,17 +2172,12 @@ const WITHDRAWAL_QUEUE_STORAGE_VERSION: u32 = 2;
 /// Minimum ledgers remaining before `touch_user_ttl` extends a user's `Shares` entry.
 const USER_SHARES_TTL_THRESHOLD: u32 = 100;
 
-/// Lock period constants for boosted APY tiers (#636).
+/// Lock period constants for share locking (#636).
 /// Assuming ~5 seconds per ledger on Stellar mainnet.
 const LOCK_30_DAYS_LEDGERS: u32 = 30 * 24 * 60 * 60 / 5; // ~518,400 ledgers
 const LOCK_90_DAYS_LEDGERS: u32 = 90 * 24 * 60 * 60 / 5; // ~1,555,200 ledgers
 const LOCK_180_DAYS_LEDGERS: u32 = 180 * 24 * 60 * 60 / 5; // ~3,110,400 ledgers
 
-/// Boost multipliers for lock periods (#636).
-/// Expressed in basis points (10000 = 1.0x, 11000 = 1.1x, etc.)
-const BOOST_30_DAYS: u32 = 11000; // 1.1x
-const BOOST_90_DAYS: u32 = 12500; // 1.25x
-const BOOST_180_DAYS: u32 = 15000; // 1.5x
 /// Target ledgers to extend a user's `Shares` entry to when maintaining TTL.
 const USER_SHARES_TTL_EXTEND_TO: u32 = 100;
 /// Default ledgers kept alive for Blend token approvals.
@@ -2176,6 +2202,7 @@ use topics::{
     TOPIC_DEX_POOL_CONFIGURED, TOPIC_DEX_SUPPLY, TOPIC_DEX_WITHDRAW, TOPIC_EMERGENCY_HARVEST,
     TOPIC_EMERGENCY_PAUSED, TOPIC_EMERGENCY_WITHDRAWAL, TOPIC_HARVEST, TOPIC_INIT,
     TOPIC_LIMITS_UPDATED, TOPIC_MAX_FAILURES_UPDATED, TOPIC_MIGRATE, TOPIC_MIGRATION_PAUSED,
+    TOPIC_MIGRATION_TARGET_CANCELLED, TOPIC_MIGRATION_TARGET_SCHEDULED,
     TOPIC_MIGRATION_TARGET_UPDATED, TOPIC_OWNERSHIP_CANCELLED, TOPIC_OWNERSHIP_INITIATED,
     TOPIC_OWNERSHIP_TRANSFERRED, TOPIC_PAUSED, TOPIC_PROTOCOL_CHANGED,
     TOPIC_RATE_LIMIT_CONFIG_UPDATED, TOPIC_RATE_LIMIT_HIT, TOPIC_REBALANCE,
@@ -3716,14 +3743,14 @@ impl NeuroWealthVault {
     // CORE LIFECYCLE - SHARE LOCKING (#636)
     // ==========================================================================
 
-    /// Locks user shares for a configurable period to earn boosted APY.
+    /// Locks user shares for a configurable period.
     ///
-    /// Users can voluntarily lock their shares for higher yields:
-    /// - 30 days = 1.1x boost
-    /// - 90 days = 1.25x boost
-    /// - 180 days = 1.5x boost
-    ///
+    /// Users can voluntarily lock their shares for 30, 90 or 180 days.
     /// Locked shares cannot be withdrawn until the lock period expires.
+    ///
+    /// Locking does not currently change yield: locked and unlocked shares earn
+    /// the same share-price growth. A yield boost for locked shares is not
+    /// implemented yet (#971).
     ///
     /// # Arguments
     ///
@@ -3743,8 +3770,10 @@ impl NeuroWealthVault {
     ///
     /// # Errors
     ///
+    /// - [`VaultError::AmountMustBePositive`] if `shares` is zero or negative.
     /// - [`VaultError::SharesAlreadyLocked`] if user already has locked shares.
-    /// - [`VaultError::InvalidLockDuration`] if duration is not 30, 90, or 180 days.
+    /// - [`VaultError::InvalidLockDuration`] if duration is not 30, 90, or 180 days,
+    ///   or if the expiry ledger would overflow `u32`.
     /// - [`VaultError::InsufficientUnlockedShares`] if user doesn't have enough unlocked shares.
     ///
     /// # Panics
@@ -3763,11 +3792,13 @@ impl NeuroWealthVault {
             .unwrap_or(0_i128);
         Self::require(&env, existing_locked == 0, VaultError::SharesAlreadyLocked);
 
-        // Validate lock duration and get boost multiplier
-        let (lock_ledgers, boost_multiplier) = match lock_duration_days {
-            30 => (LOCK_30_DAYS_LEDGERS, BOOST_30_DAYS),
-            90 => (LOCK_90_DAYS_LEDGERS, BOOST_90_DAYS),
-            180 => (LOCK_180_DAYS_LEDGERS, BOOST_180_DAYS),
+        Self::require_positive_amount(&env, shares);
+
+        // Validate lock duration
+        let lock_ledgers = match lock_duration_days {
+            30 => LOCK_30_DAYS_LEDGERS,
+            90 => LOCK_90_DAYS_LEDGERS,
+            180 => LOCK_180_DAYS_LEDGERS,
             _ => panic_with_error!(&env, VaultError::InvalidLockDuration),
         };
 
@@ -3782,7 +3813,9 @@ impl NeuroWealthVault {
 
         // Calculate lock expiry ledger
         let current_ledger = env.ledger().sequence();
-        let expiry_ledger = current_ledger + lock_ledgers;
+        let expiry_ledger = current_ledger
+            .checked_add(lock_ledgers)
+            .unwrap_or_else(|| panic_with_error!(&env, VaultError::InvalidLockDuration));
 
         // Store locked shares and expiry
         env.storage()
@@ -3799,7 +3832,6 @@ impl NeuroWealthVault {
                 user: user.clone(),
                 shares_locked: shares,
                 lock_duration_days,
-                boost_multiplier,
                 expiry_ledger,
             },
         );
@@ -3826,13 +3858,13 @@ impl NeuroWealthVault {
     ///
     /// # Errors
     ///
+    /// - [`VaultError::InsufficientShares`] if the user has no locked shares.
     /// - [`VaultError::LockPeriodNotEnded`] if the lock period has not expired.
     ///
     /// # Panics
     ///
     /// - If the vault is not initialized.
     /// - If the caller is not the user (authentication check).
-    /// - If the user has no locked shares.
     pub fn unlock_shares(env: Env, user: Address) {
         Self::require_initialized(&env);
         user.require_auth();
@@ -3843,7 +3875,7 @@ impl NeuroWealthVault {
             .persistent()
             .get(&DataKey::LockedShares(user.clone()))
             .unwrap_or(0_i128);
-        Self::require(&env, locked_shares > 0, VaultError::NoSharesToMigrate);
+        Self::require(&env, locked_shares > 0, VaultError::InsufficientShares);
 
         let expiry_ledger: u32 = env
             .storage()
@@ -5175,19 +5207,70 @@ impl NeuroWealthVault {
     // ADMINISTRATIVE - MIGRATION CONTROL (#637)
     // ==========================================================================
 
-    /// Sets the migration target vault address.
+    /// Schedules a new migration target behind a timelock (step 1 of 2). (#969)
     ///
-    /// Only the owner can set this address. Users can only migrate to the
-    /// address set by the owner to prevent migration to malicious contracts.
+    /// `migrate_shares` sends user funds to the migration target, so changing it
+    /// is as sensitive as an upgrade. The new target only takes effect once
+    /// `execute_migration_target` is called after `MIGRATION_TARGET_TIMELOCK_LEDGERS`
+    /// (the same ~24 h delay as `schedule_upgrade`). Users can watch
+    /// `get_pending_migration_target` or the scheduled event and the owner can
+    /// `cancel_migration_target` during that window. Only one pending target is
+    /// allowed at a time.
     ///
     /// # Arguments
     ///
     /// * `env` - The Soroban environment.
+    /// * `owner` - The owner address (must authorize).
     /// * `target` - The new vault contract address to allow migration to.
     ///
-    /// # Returns
+    /// # Events
     ///
-    /// None.
+    /// Emits:
+    /// - `MigrationTargetScheduledEvent`
+    ///
+    /// # Errors
+    ///
+    /// - [`VaultError::CallerIsNotOwner`] if `owner` is not the stored owner.
+    /// - [`VaultError::TimelockAlreadyPending`] if a target change is already pending.
+    pub fn schedule_migration_target(env: Env, owner: Address, target: Address) {
+        Self::require_initialized(&env);
+        owner.require_auth();
+
+        let stored_owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
+        Self::require(&env, owner == stored_owner, VaultError::CallerIsNotOwner);
+
+        Self::require(
+            &env,
+            !env.storage().instance().has(&DataKey::PendingMigrationTarget),
+            VaultError::TimelockAlreadyPending,
+        );
+
+        let effective_ledger = env
+            .ledger()
+            .sequence()
+            .saturating_add(MIGRATION_TARGET_TIMELOCK_LEDGERS);
+
+        env.storage().instance().set(
+            &DataKey::PendingMigrationTarget,
+            &(target.clone(), effective_ledger),
+        );
+
+        env.events().publish(
+            (TOPIC_MIGRATION_TARGET_SCHEDULED,),
+            MigrationTargetScheduledEvent {
+                new_target: target,
+                effective_ledger,
+                owner,
+            },
+        );
+    }
+
+    /// Applies a scheduled migration target once the timelock has elapsed (step 2 of 2). (#969)
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment.
+    /// * `owner` - The owner address (must authorize).
     ///
     /// # Events
     ///
@@ -5196,14 +5279,28 @@ impl NeuroWealthVault {
     ///
     /// # Errors
     ///
-    /// None.
-    ///
-    /// # Panics
-    ///
-    /// - If the caller is not the owner.
-    pub fn set_migration_target(env: Env, target: Address) {
+    /// - [`VaultError::CallerIsNotOwner`] if `owner` is not the stored owner.
+    /// - [`VaultError::NoTimelockPending`] if nothing is scheduled.
+    /// - [`VaultError::TimelockNotExpired`] if the delay has not elapsed yet.
+    pub fn execute_migration_target(env: Env, owner: Address) {
         Self::require_initialized(&env);
-        Self::require_is_owner(&env);
+        owner.require_auth();
+
+        let stored_owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
+        Self::require(&env, owner == stored_owner, VaultError::CallerIsNotOwner);
+
+        let pending: Option<(Address, u32)> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingMigrationTarget);
+        let (target, effective_ledger) =
+            pending.unwrap_or_else(|| panic_with_error!(&env, VaultError::NoTimelockPending));
+
+        Self::require(
+            &env,
+            env.ledger().sequence() >= effective_ledger,
+            VaultError::TimelockNotExpired,
+        );
 
         let old_target: Option<Address> = env
             .storage()
@@ -5212,9 +5309,11 @@ impl NeuroWealthVault {
 
         env.storage()
             .instance()
+            .remove(&DataKey::PendingMigrationTarget);
+        env.storage()
+            .instance()
             .set(&DataKey::MigrationTarget, &target);
 
-        let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
         env.events().publish(
             (TOPIC_MIGRATION_TARGET_UPDATED,),
             MigrationTargetUpdatedEvent {
@@ -5223,6 +5322,58 @@ impl NeuroWealthVault {
                 owner,
             },
         );
+    }
+
+    /// Cancels a pending migration target change. (#969)
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment.
+    /// * `owner` - The owner address (must authorize).
+    ///
+    /// # Events
+    ///
+    /// Emits:
+    /// - `MigrationTargetCancelledEvent`
+    ///
+    /// # Errors
+    ///
+    /// - [`VaultError::CallerIsNotOwner`] if `owner` is not the stored owner.
+    /// - [`VaultError::NoTimelockPending`] if nothing is scheduled.
+    pub fn cancel_migration_target(env: Env, owner: Address) {
+        Self::require_initialized(&env);
+        owner.require_auth();
+
+        let stored_owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
+        Self::require(&env, owner == stored_owner, VaultError::CallerIsNotOwner);
+
+        let pending: Option<(Address, u32)> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingMigrationTarget);
+        let (cancelled_target, _) =
+            pending.unwrap_or_else(|| panic_with_error!(&env, VaultError::NoTimelockPending));
+
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingMigrationTarget);
+
+        env.events().publish(
+            (TOPIC_MIGRATION_TARGET_CANCELLED,),
+            MigrationTargetCancelledEvent {
+                cancelled_target,
+                owner,
+            },
+        );
+    }
+
+    /// Returns the pending migration target and the ledger it becomes executable at,
+    /// or `None` if no change is scheduled. (#969)
+    pub fn get_pending_migration_target(env: Env) -> Option<(Address, u32)> {
+        Self::require_initialized(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingMigrationTarget)
     }
 
     /// Pauses or unpauses share migration independently of the main vault pause.

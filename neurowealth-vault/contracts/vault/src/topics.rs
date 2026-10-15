@@ -106,6 +106,10 @@ pub const TOPIC_COMPOUND: Symbol = symbol_short!("compound");
 pub const TOPIC_MIGRATE: Symbol = symbol_short!("migrate");
 /// Topic for `MigrationTargetUpdatedEvent`, published when the owner sets/updates migration target.
 pub const TOPIC_MIGRATION_TARGET_UPDATED: Symbol = symbol_short!("mig_tgt");
+/// Topic for `MigrationTargetScheduledEvent`, published by `schedule_migration_target` (#969).
+pub const TOPIC_MIGRATION_TARGET_SCHEDULED: Symbol = symbol_short!("mig_sched");
+/// Topic for `MigrationTargetCancelledEvent`, published by `cancel_migration_target` (#969).
+pub const TOPIC_MIGRATION_TARGET_CANCELLED: Symbol = symbol_short!("mig_cncl");
 /// Topic for `MigrationPausedEvent`, published when migration is paused/unpaused.
 pub const TOPIC_MIGRATION_PAUSED: Symbol = symbol_short!("mig_pse");
 /// Topic 0 for `SharesLockedEvent`; topic 1 is the user's `Address`.

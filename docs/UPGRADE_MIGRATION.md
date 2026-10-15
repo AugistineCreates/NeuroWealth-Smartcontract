@@ -15,7 +15,7 @@ In addition to the traditional contract upgrade process described below, the Neu
 - Comprehensive event logging for migration tracking
 
 **Migration Flow:**
-1. Owner sets migration target via `set_migration_target(new_vault_address)`
+1. Owner schedules the migration target via `schedule_migration_target(owner, new_vault_address)`, waits out the timelock (~24 h, same as upgrades), then calls `execute_migration_target(owner)`
 2. Users call `migrate_shares(user)` to move their positions
 3. Old vault burns shares and transfers equivalent assets to new vault
 4. New vault mints shares for the user based on the transferred assets
@@ -452,11 +452,13 @@ User-initiated vault migration allows users to trustlessly move their share posi
 
 **Step 1: Owner Sets Migration Target**
 ```rust
-owner.set_migration_target(new_vault_address);
+vault.schedule_migration_target(owner, new_vault_address);
+// wait MIGRATION_TARGET_TIMELOCK_LEDGERS (~24 h)
+vault.execute_migration_target(owner);
 ```
-- Only the owner can set the migration target
-- This prevents migration to malicious contracts
-- Emits `MigrationTargetUpdatedEvent`
+- Only the owner can schedule, execute or cancel (`cancel_migration_target`) a target change
+- The timelock gives users time to react before funds can be sent to a new target; `get_pending_migration_target()` shows what is scheduled
+- Emits `MigrationTargetScheduledEvent` on schedule, `MigrationTargetUpdatedEvent` on execute and `MigrationTargetCancelledEvent` on cancel
 
 **Step 2: (Optional) Owner Pauses Migration**
 ```rust
