@@ -21,7 +21,7 @@
 extern crate std;
 
 use super::utils::*;
-use crate::{HarvestEvent, TOPIC_HARVEST};
+use crate::{HarvestEvent, TOPIC_HARVEST, TOPIC_PROTOCOL_CHANGED};
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Ledger, MockAuth, MockAuthInvoke},
@@ -107,7 +107,15 @@ fn test_harvest_withdraws_and_resupplies_blend() {
     assert_eq!(blend_client.supplied(&usdc_token), deposit_amount);
     assert_eq!(token_client.balance(&blend_pool), deposit_amount);
 
+    let protocol_events_before =
+        find_events_by_topic(env.events().all(), &env, TOPIC_PROTOCOL_CHANGED).len();
     client.harvest(&0_i128);
+    let protocol_events_after =
+        find_events_by_topic(env.events().all(), &env, TOPIC_PROTOCOL_CHANGED).len();
+    assert_eq!(
+        protocol_events_after, protocol_events_before,
+        "harvest must not emit transient ProtocolChanged events"
+    );
 
     // Post-harvest: funds must be back in Blend (withdraw + re-supply).
     assert_eq!(

@@ -42,6 +42,8 @@ fn test_emergency_withdraw_when_paused_succeeds() {
 
     // Verify shares are burned
     assert_eq!(client.get_shares(&user), 0);
+    let (users, _) = client.get_users_with_shares(&0, &10);
+    assert_eq!(users.len(), 0, "fully withdrawn user should be pruned from index");
 }
 
 #[test]
