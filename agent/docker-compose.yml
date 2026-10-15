@@ -9,6 +9,7 @@ services:
       - "3001:3001"
     environment:
       - PORT=3001
+      - AGENT_EXECUTION_MODE=dry-run
       - DATABASE_URL=postgres://postgres:postgres@postgres:5432/neurowealth
       - SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
       - OPENAI_API_KEYS=sk-key1,sk-key2

@@ -211,12 +211,26 @@ cargo test
 
 See [`scripts/README-E2E.md`](scripts/README-E2E.md) for end-to-end devnet validation.
 
+### Run the Off-chain App Locally
+
+Postgres, the AI agent, the WhatsApp bot and the frontend start with one command:
+
+```bash
+docker compose up
+```
+
+See [`docs/LOCAL_DEV_STACK.md`](docs/LOCAL_DEV_STACK.md) for ports, configuration and limitations.
+
 > For component-specific setup, use the workspace links in [Workspace Layout](#workspace-layout).
 
 ## Further Reading
 
 | Document | Purpose |
 |----------|---------|
+| [`docs/ADR_INDEX.md`](docs/ADR_INDEX.md) | Index of every design decision and design doc, grouped by area |
+| [`docs/LOCAL_DEV_STACK.md`](docs/LOCAL_DEV_STACK.md) | One-command local stack: Postgres, agent, WhatsApp bot, frontend |
+| [`docs/AGENT_DEPLOYMENT.md`](docs/AGENT_DEPLOYMENT.md) | Deploying and operating the AI agent |
+| [`docs/SERVICE_API_REFERENCE.md`](docs/SERVICE_API_REFERENCE.md) | HTTP API of the agent, metrics server and WhatsApp bot |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Storage layout, share accounting math, asset flow diagrams |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Development setup, CI requirements, PR process |
 | [`scripts/README-E2E.md`](scripts/README-E2E.md) | End-to-end devnet test guide |

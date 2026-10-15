@@ -3,6 +3,16 @@ import twilio from 'twilio';
 import pino from 'pino';
 import { hashPhoneNumber } from './cryptoUtils';
 import { runExclusive } from './commandLock';
+import {
+  deriveIdempotencyKey,
+  getIdempotencyStore,
+  IdempotencyStore,
+  isTransientError,
+  LeaseLostError,
+  RetryableWebhookError,
+  SideEffectGuard,
+  WEBHOOK_LEASE_MS,
+} from './webhookIdempotency';
 
 const logger = pino({ name: 'whatsapp-webhook' });
 
@@ -14,6 +24,9 @@ import { validateIntent } from './contractLimits';
 import { getPortfolio, handleDeposit, handleWithdraw, handleStrategyUpdate } from './vaultRouter';
 
 const MessagingResponse = twilio.twiml.MessagingResponse;
+
+/** Acknowledges a webhook without sending any reply message to the user. */
+const EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
 
 /**
  * Main Webhook Handler for WhatsApp Messages (Twilio HTTP POST)
@@ -29,22 +42,136 @@ export async function handleWhatsAppWebhook(req: Request, res: Response): Promis
 
   // Hash PII (phone number) at rest
   const phoneHash = hashPhoneNumber(fromNumber);
+  const idempotencyKey = deriveIdempotencyKey(req.body, req.headers?.['i-twilio-idempotency-token']);
 
   // Every command below reads and mutates this user's shared session, OTP,
   // strategy, and transaction state. Serialize per phone number so
   // concurrent messages from the same user apply in arrival order instead
   // of racing; messages from different users still process in parallel.
-  await runExclusive(phoneHash, () => processWhatsAppMessage(phoneHash, messageBody, res));
+  // The idempotency claim happens inside the lock, so an in-process
+  // duplicate observes the first delivery's final state.
+  await runExclusive(phoneHash, () =>
+    processIdempotently(idempotencyKey, req.body.MessageSid || null, phoneHash, messageBody, res)
+  );
 }
 
-async function processWhatsAppMessage(phoneHash: string, messageBody: string, res: Response): Promise<void> {
+/**
+ * Runs a webhook delivery at most once per idempotency key. Twilio may
+ * redeliver the same message after a timeout; duplicates of a finished
+ * delivery are acknowledged without re-running the command or sending a
+ * second reply, and a retryable failure leaves the key open for the next
+ * delivery to resume.
+ */
+async function processIdempotently(
+  idempotencyKey: string | null,
+  messageSid: string | null,
+  phoneHash: string,
+  messageBody: string,
+  res: Response
+): Promise<void> {
+  if (!idempotencyKey) {
+    logger.warn({ phoneHash }, 'Inbound webhook has no MessageSid or idempotency token; processing without deduplication');
+    await respondWithCommand(null, null, 0, phoneHash, messageBody, res);
+    return;
+  }
+
+  const store = getIdempotencyStore();
+  let claim;
+  try {
+    claim = await store.claim(idempotencyKey, { messageSid, phoneHash }, WEBHOOK_LEASE_MS);
+  } catch (error) {
+    // Nothing has run yet, so asking Twilio to retry is always safe.
+    logger.error({ error, phoneHash, idempotencyKey }, 'Failed to claim inbound webhook idempotency key');
+    res.status(503).send('Temporarily unable to process message');
+    return;
+  }
+
+  switch (claim.kind) {
+    case 'completed':
+      logger.info({ phoneHash, idempotencyKey }, 'Duplicate inbound webhook after completion; acknowledging without reply');
+      res.status(claim.responseStatus).type('text/xml').send(EMPTY_TWIML);
+      return;
+    case 'abandoned':
+      logger.error(
+        { phoneHash, idempotencyKey },
+        'Duplicate inbound webhook for an abandoned attempt with unknown outcome; not re-running command'
+      );
+      res.status(200).type('text/xml').send(EMPTY_TWIML);
+      return;
+    case 'in_progress':
+      // Another worker holds the lease. Signal a retryable conflict so a
+      // later redelivery can either see the result or resume a failure.
+      logger.info({ phoneHash, idempotencyKey }, 'Duplicate inbound webhook while original is still processing');
+      res.status(409).send('Message is already being processed');
+      return;
+    case 'acquired':
+      await respondWithCommand(idempotencyKey, store, claim.attempt, phoneHash, messageBody, res);
+      return;
+  }
+}
+
+async function respondWithCommand(
+  idempotencyKey: string | null,
+  store: IdempotencyStore | null,
+  attempt: number,
+  phoneHash: string,
+  messageBody: string,
+  res: Response
+): Promise<void> {
+  const guard = new SideEffectGuard(store, idempotencyKey, attempt);
+
+  let reply: string;
+  try {
+    reply = await processWhatsAppMessage(phoneHash, messageBody, guard);
+  } catch (error) {
+    if (error instanceof LeaseLostError) {
+      logger.warn({ phoneHash, idempotencyKey, attempt }, 'Lost idempotency lease before side effects; aborting attempt');
+      res.status(409).send('Message is already being processed');
+      return;
+    }
+
+    // Only RetryableWebhookError escapes processWhatsAppMessage; anything
+    // else would be a programming error, so treat it the same way: nothing
+    // irreversible was done (or it would have been converted to a reply).
+    logger.warn({ error, phoneHash, idempotencyKey, attempt }, 'Retryable failure processing inbound webhook');
+    if (store && idempotencyKey) {
+      await store
+        .fail(idempotencyKey, attempt, error instanceof Error ? error.message : String(error))
+        .catch((storeError) =>
+          logger.error({ error: storeError, idempotencyKey }, 'Failed to record retryable webhook failure')
+        );
+    }
+    res.status(503).send('Temporarily unable to process message');
+    return;
+  }
+
+  if (store && idempotencyKey) {
+    // If this write fails the record stays `processing`; once its lease
+    // expires a duplicate is either re-run (no side effects started, e.g. a
+    // balance read) or marked abandoned - never blindly replayed.
+    await store
+      .complete(idempotencyKey, attempt, 200)
+      .catch((storeError) =>
+        logger.error({ error: storeError, idempotencyKey }, 'Failed to record completed webhook processing')
+      );
+  }
+  res.status(200).type('text/xml').send(reply);
+}
+
+/**
+ * Executes one inbound command and returns the TwiML reply. Callers must
+ * invoke `guard.begin()` before any state-changing step: a transient error
+ * raised before that point is rethrown as RetryableWebhookError so the
+ * delivery can be retried, while any error after it becomes a terminal
+ * user-facing reply, because the command may already have partially applied.
+ */
+async function processWhatsAppMessage(phoneHash: string, messageBody: string, guard: SideEffectGuard): Promise<string> {
   const twiml = new MessagingResponse();
 
   // Enforce per-phone rate limiting
   if (!checkRateLimit(phoneHash)) {
     twiml.message('⚠️ Rate limit exceeded. Please wait a minute before sending another message.');
-    res.type('text/xml').send(twiml.toString());
-    return;
+    return twiml.toString();
   }
 
   // Get or restore user session
@@ -56,6 +183,7 @@ async function processWhatsAppMessage(phoneHash: string, messageBody: string, re
     // Flow 1: UNVERIFIED User sends "hi" -> Request OTP verification
     if (session.state === UserState.UNVERIFIED) {
       if (intent.type === 'GREETING' || intent.type === 'UNKNOWN') {
+        await guard.begin();
         const otpCode = generateOTP(phoneHash);
         updateState(phoneHash, UserState.AWAITING_OTP);
 
@@ -67,13 +195,14 @@ async function processWhatsAppMessage(phoneHash: string, messageBody: string, re
       } else {
         twiml.message('Welcome to NeuroWealth! Send "hi" to begin account verification.');
       }
-      res.type('text/xml').send(twiml.toString());
-      return;
+      return twiml.toString();
     }
 
     // Flow 2: AWAITING_OTP -> Verify OTP input code
     if (session.state === UserState.AWAITING_OTP) {
       if (intent.type === 'OTP_CODE' && intent.otpCode) {
+        // verifyOTP consumes attempts / the code itself.
+        await guard.begin();
         const verification = verifyOTP(phoneHash, intent.otpCode);
 
         if (verification.success) {
@@ -96,8 +225,7 @@ async function processWhatsAppMessage(phoneHash: string, messageBody: string, re
       } else {
         twiml.message('Please enter the 6-digit verification code sent to your phone (valid for 5 minutes).');
       }
-      res.type('text/xml').send(twiml.toString());
-      return;
+      return twiml.toString();
     }
 
     // Flow 3: VERIFIED User -> Handle Chat Intents
@@ -105,10 +233,10 @@ async function processWhatsAppMessage(phoneHash: string, messageBody: string, re
       const wallet = await getWallet(phoneHash);
       if (!wallet) {
         // Fallback state sync
+        await guard.begin();
         updateState(phoneHash, UserState.UNVERIFIED);
         twiml.message('Session expired. Please send "hi" to start verification.');
-        res.type('text/xml').send(twiml.toString());
-        return;
+        return twiml.toString();
       }
 
       // Reject amounts and strategy names the vault contract would refuse
@@ -116,8 +244,7 @@ async function processWhatsAppMessage(phoneHash: string, messageBody: string, re
       const validation = validateIntent(intent);
       if (!validation.ok) {
         twiml.message(`⚠️ ${validation.error}`);
-        res.type('text/xml').send(twiml.toString());
-        return;
+        return twiml.toString();
       }
 
       switch (intent.type) {
@@ -148,12 +275,14 @@ async function processWhatsAppMessage(phoneHash: string, messageBody: string, re
         }
 
         case 'DEPOSIT': {
+          await guard.begin();
           const result = await handleDeposit(phoneHash, intent.amount as number, intent.strategy);
           twiml.message(`🤖 ${result.message}`);
           break;
         }
 
         case 'WITHDRAW': {
+          await guard.begin();
           const result = await handleWithdraw(phoneHash, intent.amount, intent.withdrawAll);
           twiml.message(`🤖 ${result.message}`);
           break;
@@ -164,6 +293,7 @@ async function processWhatsAppMessage(phoneHash: string, messageBody: string, re
             twiml.message('❌ Please specify a valid strategy.');
             break;
           }
+          await guard.begin();
           const result = await handleStrategyUpdate(phoneHash, intent.strategy);
           twiml.message(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
           break;
@@ -182,6 +312,13 @@ async function processWhatsAppMessage(phoneHash: string, messageBody: string, re
       }
     }
   } catch (error) {
+    if (error instanceof LeaseLostError) throw error;
+    if (!guard.hasStarted && isTransientError(error)) {
+      throw error instanceof RetryableWebhookError
+        ? error
+        : new RetryableWebhookError('Transient failure before any side effect', { cause: error });
+    }
+
     const reqId = `req-${Math.random().toString(36).substring(2, 9)}`;
     logger.error(
       { error, phoneHash, intent, state: session.state, reqId },
@@ -190,5 +327,5 @@ async function processWhatsAppMessage(phoneHash: string, messageBody: string, re
     twiml.message(`❌ An error occurred processing your request. Please try again in a few moments. (Ref: ${reqId})`);
   }
 
-  res.type('text/xml').send(twiml.toString());
+  return twiml.toString();
 }
