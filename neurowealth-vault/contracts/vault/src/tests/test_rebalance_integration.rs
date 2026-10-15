@@ -847,6 +847,40 @@ fn test_rebalance_exit_failure_blocks_protocol_transition() {
         symbol_short!("exit_fail"),
         "RebalanceFailedEvent.reason must be 'exit_fail'"
     );
+    assert_eq!(
+        client.get_consecutive_failures(),
+        1,
+        "an incomplete exit must count toward the circuit breaker"
+    );
+}
+
+#[test]
+fn test_consecutive_exit_failures_auto_pause_vault() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let blend_client = MockBlendPoolClient::new(&env, &blend_pool);
+    client.set_blend_pool(&owner, &blend_pool);
+
+    let dex_pool = env.register_contract(None, MockDexPool);
+    client.set_dex_pool(&owner, &dex_pool);
+    let user = Address::generate(&env);
+    mint_and_deposit(&env, &client, &usdc_token, &user, 20_000_000);
+    client.rebalance(&symbol_short!("blend"), &700, &0);
+
+    client.set_max_consecutive_failures(&2);
+    blend_client.set_max_withdraw_limit(&1_000_000);
+
+    client.rebalance(&symbol_short!("dex"), &700, &0);
+    assert_eq!(client.get_consecutive_failures(), 1);
+    assert!(!client.is_paused());
+
+    client.rebalance(&symbol_short!("dex"), &700, &0);
+    assert_eq!(client.get_consecutive_failures(), 2);
+    assert!(client.is_paused());
 }
 
 /// When the vault is in Blend and the agent calls rebalance("none") but the

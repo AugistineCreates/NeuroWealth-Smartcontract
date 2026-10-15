@@ -3489,7 +3489,9 @@ impl NeuroWealthVault {
             .persistent()
             .get(&DataKey::Shares(user.clone()))
             .unwrap_or(0_i128);
-        let unlocked_shares = total_user_shares - existing_locked;
+        let unlocked_shares = total_user_shares
+            .checked_sub(existing_locked)
+            .unwrap_or_else(|| panic_with_error!(&env, VaultError::InsufficientUnlockedShares));
         Self::require(&env, shares <= unlocked_shares, VaultError::InsufficientUnlockedShares);
 
         // Calculate lock expiry ledger
@@ -3724,7 +3726,9 @@ impl NeuroWealthVault {
     /// * `env` - The Soroban environment.
     /// * `protocol` - The target protocol to move funds to ("blend", "dex", or "none").
     /// * `expected_apy` - Expected APY in basis points (e.g., 850 = 8.5%).
-    /// * `min_out` - Minimum assets expected to remain (slippage protection).
+    /// * `min_out` - Slippage tolerance in basis points, applied independently
+    ///   to each leg's expected amount. Values above 10,000 retain the legacy
+    ///   absolute minimum-output behavior for compatibility.
     ///
     /// # Returns
     ///
@@ -3769,7 +3773,7 @@ impl NeuroWealthVault {
 
         Self::require_rebalance_cooldown_elapsed(&env);
 
-        if min_out < 0 {
+        if min_out < 0 || (min_out <= 10_000 && min_out > Self::BPS_DENOMINATOR as i128) {
             panic_with_error!(&env, VaultError::MinOutMustBeNonNegative);
         }
 
@@ -3823,6 +3827,10 @@ impl NeuroWealthVault {
                             reason: symbol_short!("exit_fail"),
                         },
                     );
+                    // An incomplete exit is a failed rebalance attempt. Record
+                    // it for the circuit breaker, but do not advance
+                    // LastRebalanceLedger because no rebalance completed.
+                    Self::record_rebalance_outcome(&env, &symbol_short!("failed"));
                     return;
                 }
             }
@@ -3940,6 +3948,10 @@ impl NeuroWealthVault {
                                 reason: symbol_short!("exit_fail"),
                             },
                         );
+                        // Failed exits count toward auto-pause, but do not
+                        // advance LastRebalanceLedger because the target was
+                        // not reached.
+                        Self::record_rebalance_outcome(&env, &symbol_short!("failed"));
                         return;
                     }
                 }
@@ -4236,7 +4248,8 @@ impl NeuroWealthVault {
     /// * `env` - The Soroban environment.
     /// * `blend_bps` - Target Blend allocation in basis points.
     /// * `dex_bps` - Target DEX allocation in basis points.
-    /// * `min_out` - Slippage floor forwarded to each protocol leg (0 = none).
+    /// * `min_out` - Slippage tolerance in basis points, applied independently
+    ///   to each venue leg (0 = no tolerance).
     ///
     /// # Events
     ///
@@ -4276,7 +4289,7 @@ impl NeuroWealthVault {
         );
         Self::require_valid_allocation(&env, blend_bps, dex_bps);
 
-        if min_out < 0 {
+        if min_out < 0 || (min_out <= 10_000 && min_out > Self::BPS_DENOMINATOR as i128) {
             panic_with_error!(&env, VaultError::MinOutMustBeNonNegative);
         }
 
@@ -4631,7 +4644,8 @@ impl NeuroWealthVault {
     /// # Arguments
     ///
     /// * `env` - The Soroban environment.
-    /// * `min_out` - Minimum amount the withdrawal must return (slippage floor).
+    /// * `min_out` - Slippage tolerance in basis points, applied independently
+    ///   to the withdrawal and supply legs.
     ///
     /// # Returns
     ///
@@ -4662,7 +4676,7 @@ impl NeuroWealthVault {
         let stored_owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
         Self::require(&env, owner == stored_owner, VaultError::CallerIsNotOwner);
 
-        if min_out < 0 {
+        if min_out < 0 || (min_out <= 10_000 && min_out > Self::BPS_DENOMINATOR as i128) {
             panic_with_error!(&env, VaultError::MinOutMustBeNonNegative);
         }
 
@@ -10315,7 +10329,9 @@ impl NeuroWealthVault {
             .get(&DataKey::LockedShares(user.clone()))
             .unwrap_or(0_i128);
         let shares_for_redemption = if mode == BurnAndPayMode::All && locked_shares > 0 {
-            let unlocked_shares = user_shares - locked_shares;
+            let unlocked_shares = user_shares
+                .checked_sub(locked_shares)
+                .unwrap_or_else(|| panic_with_error!(env, VaultError::InsufficientUnlockedShares));
             Self::require(
                 env,
                 unlocked_shares > 0,
@@ -10371,13 +10387,11 @@ impl NeuroWealthVault {
         };
 
         if mode == BurnAndPayMode::Requested && locked_shares > 0 {
-            let unlocked_shares = user_shares - locked_shares;
+            let unlocked_shares = user_shares
+                .checked_sub(locked_shares)
+                .unwrap_or_else(|| panic_with_error!(env, VaultError::InsufficientUnlockedShares));
             let max_withdrawable = Self::convert_to_assets_internal(env, unlocked_shares);
-            Self::require(
-                env,
-                requested <= max_withdrawable,
-                VaultError::InsufficientShares,
-            );
+            Self::require(env, requested <= max_withdrawable, VaultError::InsufficientShares);
         }
 
         let current_protocol: Symbol = env
@@ -10431,16 +10445,29 @@ impl NeuroWealthVault {
             VaultError::InsufficientSharesForAmount,
         );
 
-        let paid = if mode == BurnAndPayMode::All && assets_to_pay < requested {
-            assets_to_pay
-        } else {
-            Self::convert_to_assets_internal(env, shares_to_burn)
-        };
+        if mode == BurnAndPayMode::Requested && locked_shares > 0 {
+            let remaining_shares = user_shares
+                .checked_sub(shares_to_burn)
+                .unwrap_or_else(|| panic_with_error!(env, VaultError::InsufficientSharesForAmount));
+            Self::require(
+                env,
+                remaining_shares >= locked_shares,
+                VaultError::InsufficientShares,
+            );
+        }
+
+        // Ceil-burning shares followed by floor-converting them can produce
+        // more assets than requested when the share price is above one. Cap
+        // the transfer at the amount actually available/requested.
+        let paid = min(
+            Self::convert_to_assets_internal(env, shares_to_burn),
+            assets_to_pay,
+        );
         Self::require(env, paid > 0, VaultError::NoAssetsToReturn);
 
         let new_user_shares = user_shares
             .checked_sub(shares_to_burn)
-            .expect("vault: withdrawal underflow");
+            .unwrap_or_else(|| panic_with_error!(env, VaultError::InsufficientSharesForAmount));
         env.storage()
             .persistent()
             .set(&DataKey::Shares(user.clone()), &new_user_shares);
@@ -10520,6 +10547,17 @@ impl NeuroWealthVault {
             let _ = leg;
             panic_with_error!(env, VaultError::MinOutNotMet);
         }
+    }
+
+    /// Converts the public slippage tolerance into a minimum for one leg.
+    /// Legacy values above the bps denominator remain absolute minimums.
+    fn minimum_out_for_leg(expected: i128, slippage_bps: i128) -> i128 {
+        if slippage_bps > Self::BPS_DENOMINATOR as i128 {
+            return slippage_bps;
+        }
+        expected
+            .saturating_mul(Self::BPS_DENOMINATOR as i128 - slippage_bps)
+            / Self::BPS_DENOMINATOR as i128
     }
 
     /// Internal helper: Supplies USDC to the Blend pool.
@@ -10634,7 +10672,12 @@ impl NeuroWealthVault {
         let supplied =
             BlendPoolClient::supply(env, &pool_address, &usdc_token, amount, &vault_address);
 
-        Self::require_min_out(env, supplied, min_out, "blend supply");
+        Self::require_min_out(
+            env,
+            supplied,
+            Self::minimum_out_for_leg(amount, min_out),
+            "blend supply",
+        );
 
         if supplied > 0 {
             Self::set_current_protocol(env, symbol_short!("blend"));
@@ -10704,7 +10747,12 @@ impl NeuroWealthVault {
             &vault_address,
         );
 
-        Self::require_min_out(env, withdrawn, min_out, "blend withdraw");
+        Self::require_min_out(
+            env,
+            withdrawn,
+            Self::minimum_out_for_leg(amount_to_withdraw, min_out),
+            "blend withdraw",
+        );
 
         // Emit event for withdrawal
         env.events().publish(
@@ -10773,7 +10821,7 @@ impl NeuroWealthVault {
             vault_address.clone().into_val(env),
             usdc_token.clone().into_val(env),
             amount.into_val(env),
-            min_out.into_val(env),
+            Self::minimum_out_for_leg(amount, min_out).into_val(env),
         ];
         let transfer_from_args: Vec<Val> = vec![
             env,
@@ -10826,11 +10874,16 @@ impl NeuroWealthVault {
             &pool_address,
             &usdc_token,
             amount,
-            min_out,
+            Self::minimum_out_for_leg(amount, min_out),
             &vault_address,
         );
 
-        Self::require_min_out(env, supplied, min_out, "dex supply");
+        Self::require_min_out(
+            env,
+            supplied,
+            Self::minimum_out_for_leg(amount, min_out),
+            "dex supply",
+        );
 
         if supplied > 0 {
             Self::set_current_protocol(env, symbol_short!("dex"));
@@ -10895,11 +10948,16 @@ impl NeuroWealthVault {
             &pool_address,
             &usdc_token,
             amount_to_withdraw,
-            min_out,
+            Self::minimum_out_for_leg(amount_to_withdraw, min_out),
             &vault_address,
         );
 
-        Self::require_min_out(env, withdrawn, min_out, "dex withdraw");
+        Self::require_min_out(
+            env,
+            withdrawn,
+            Self::minimum_out_for_leg(amount_to_withdraw, min_out),
+            "dex withdraw",
+        );
 
         env.events().publish(
             (TOPIC_DEX_WITHDRAW,),
