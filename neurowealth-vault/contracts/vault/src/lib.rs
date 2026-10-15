@@ -2480,6 +2480,13 @@ impl DexPoolClient {
 #[contract]
 pub struct NeuroWealthVault;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BurnAndPayMode {
+    Requested,
+    All,
+    Emergency,
+}
+
 #[contractimpl]
 // Re-enables `missing_docs` for the contract's public entrypoints, which the
 // crate-level allow would otherwise silence. Keep this attribute: it is what
@@ -2879,11 +2886,10 @@ impl NeuroWealthVault {
         Self::enforce_user_rate_limit(&env, &user, RATE_LIMIT_DEPOSIT);
         Self::enforce_user_rate_limit(&env, &user, RATE_LIMIT_BATCH_DEPOSIT);
 
-        // Second pass: execute transfers.
+        // All entries share the same token, sender, and recipient.
         let token_client = token::Client::new(&env, &usdc_token);
-        for i in 0..total_entries {
-            let (_token, amount) = entries.get(i).unwrap();
-            token_client.transfer(&user, &env.current_contract_address(), &amount);
+        if total_amount > 0 {
+            token_client.transfer(&user, &env.current_contract_address(), &total_amount);
         }
 
         // Update total deposits and mint shares once for the aggregate.
@@ -3005,195 +3011,18 @@ impl NeuroWealthVault {
     pub fn withdraw(env: Env, user: Address, amount: i128) {
         Self::require_initialized(&env);
         user.require_auth();
-
         Self::require_not_paused(&env);
         Self::require_positive_amount(&env, amount);
-
         Self::enforce_user_rate_limit(&env, &user, RATE_LIMIT_WITHDRAW);
-
-
-        // Flash-loan protection: enforce minimum holding period (#659).
-        // If the owner has configured a non-zero MinHoldingPeriod, reject any
-        // withdrawal attempted before `last_deposit_ledger + min_holding_period`.
-        let min_holding: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::MinHoldingPeriod)
-            .unwrap_or(0_u32);
-        if min_holding > 0 {
-            if let Some(last_deposit_ledger) = env
-                .storage()
-                .persistent()
-                .get::<DataKey, u32>(&DataKey::LastDepositLedger(user.clone()))
-            {
-                let current_ledger = env.ledger().sequence();
-                let elapsed = current_ledger.saturating_sub(last_deposit_ledger);
-                if elapsed < min_holding {
-                    env.events().publish(
-                        (symbol_short!("fl_block"), user.clone()),
-                        FlashLoanProtectionTriggeredEvent {
-                            user: user.clone(),
-                            last_deposit_ledger,
-                            current_ledger,
-                            min_holding_period: min_holding,
-                        },
-                    );
-                    panic_with_error!(&env, VaultError::HoldingPeriodNotElapsed);
-                }
-            }
-        }
-
-        // Check if user has locked shares (#636)
-        let locked_shares: i128 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::LockedShares(user.clone()))
-            .unwrap_or(0_i128);
-        if locked_shares > 0 {
-            let total_user_shares: i128 = env
-                .storage()
-                .persistent()
-                .get(&DataKey::Shares(user.clone()))
-                .unwrap_or(0_i128);
-            let unlocked_shares = total_user_shares - locked_shares;
-
-            // Calculate what the user can withdraw based on unlocked shares
-            let total_shares = Self::get_total_shares_internal(&env);
-            let total_assets = Self::get_total_assets_internal(&env);
-            let max_withdrawable = if total_shares > 0 && total_assets > 0 {
-                Self::convert_to_assets_internal(&env, unlocked_shares)
-            } else {
-                0
-            };
-
-            Self::require(&env, amount <= max_withdrawable, VaultError::InsufficientShares);
-        }
-
-        // Check if funds are deployed in Blend and need to be retrieved
-        let current_protocol: Symbol = env
-            .storage()
-            .instance()
-            .get(&DataKey::CurrentProtocol)
-            .unwrap_or(symbol_short!("none"));
-
-        let usdc_token: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
-        let token_client = token::Client::new(&env, &usdc_token);
-
-        // We use actual_to_return to track how much we can really give back.
-        // Initially, we assume we can fulfill the whole request.
-        let mut actual_to_return = amount;
-
-        if current_protocol == symbol_short!("blend")
-            || current_protocol == symbol_short!("dex")
-            || current_protocol == symbol_short!("multi")
-        {
-            // Check vault's USDC balance
-            let vault_balance = token_client.balance(&env.current_contract_address());
-
-            // If vault doesn't have enough USDC, try to withdraw from the active protocol
-            if vault_balance < amount {
-                // Calculate how much we need to withdraw
-                let needed = amount
-                    .checked_sub(vault_balance)
-                    .expect("vault: withdrawal underflow");
-
-                // Attempt to withdraw from the active protocol (Blend or DEX).
-                // If this returns less than needed, we will reconcile below
-                let _withdrawn =
-                    Self::withdraw_amount_from_protocol(&env, &current_protocol, needed, 0);
-
-                // RECONCILIATION: Check actual available USDC after the withdrawal.
-                // We cap the withdrawal to what the vault actually has available.
-                let available_usdc = token_client.balance(&env.current_contract_address());
-                actual_to_return = min(amount, available_usdc);
-            }
-        }
-
-        Self::require(
-            &env,
-            actual_to_return > 0,
-            VaultError::InsufficientLiquidity,
-        );
-
-        // Share-based withdrawal:
-        // - Convert reconciled asset amount to shares
-        // - Burn shares from user
-        // - Return proportional assets based on current share price
-
-        let user_shares: i128 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Shares(user.clone()))
-            .unwrap_or(0_i128);
-        Self::require(&env, user_shares > 0, VaultError::InsufficientShares);
-
-        let total_shares = Self::get_total_shares_internal(&env);
-        let total_assets = Self::get_total_assets_internal(&env);
-        Self::require(
-            &env,
-            total_shares > 0 && total_assets > 0,
-            VaultError::NoAssetsToWithdraw,
-        );
-
-        // We use actual_to_return to determine how many shares to burn.
-        // If Blend returned less than needed, the user will receive a partial
-        // withdrawal and keep their remaining shares.
-        // Use ceiling division to prevent dust attacks (ensure at least 1 share burned when assets > 0).
-        let shares_to_burn = Self::convert_to_shares_internal_ceil(&env, actual_to_return);
-        Self::require(
-            &env,
-            shares_to_burn > 0,
-            VaultError::SharesToBurnMustBePositive,
-        );
-        Self::require(
-            &env,
-            user_shares >= shares_to_burn,
-            VaultError::InsufficientSharesForAmount,
-        );
-
-        // Calculate actual assets to return based on burned shares.
-        // Due to integer division, this may be slightly less than `actual_to_return`,
-        // but never more (prevents over-withdrawal due to rounding).
-        let usdc_to_return = Self::convert_to_assets_internal(&env, shares_to_burn);
-
-        // Update user shares and total shares
-        let new_user_shares = user_shares
-            .checked_sub(shares_to_burn)
-            .expect("vault: withdrawal underflow");
-        env.storage()
-            .persistent()
-            .set(&DataKey::Shares(user.clone()), &new_user_shares);
-
-        // Prune user from index when shares reach zero (Issue #440)
-        if new_user_shares == 0 {
-            Self::prune_user_from_index(&env, &user);
-        }
-
-        let new_total_shares = total_shares
-            .checked_sub(shares_to_burn)
-            .expect("vault: withdrawal underflow");
-        env.storage()
-            .instance()
-            .set(&DataKey::TotalShares, &new_total_shares);
-
-        // Update total assets (principal + yield)
-        let new_total_assets = total_assets
-            .checked_sub(usdc_to_return)
-            .expect("vault: withdrawal underflow");
-        env.storage()
-            .instance()
-            .set(&DataKey::TotalAssets, &new_total_assets);
-
-        Self::reduce_total_deposits_on_withdraw(&env, usdc_to_return);
-
-        token_client.transfer(&env.current_contract_address(), &user, &usdc_to_return);
+        let (paid, burned) =
+            Self::burn_and_pay(&env, &user, amount, BurnAndPayMode::Requested);
 
         env.events().publish(
             (TOPIC_WITHDRAW, user.clone()),
             WithdrawEvent {
                 user,
-                amount: usdc_to_return,
-                shares: shares_to_burn,
+                amount: paid,
+                shares: burned,
             },
         );
     }
@@ -3239,168 +3068,20 @@ impl NeuroWealthVault {
     pub fn withdraw_all(env: Env, user: Address) -> i128 {
         Self::require_initialized(&env);
         user.require_auth();
-
         Self::require_not_paused(&env);
         Self::enforce_user_rate_limit(&env, &user, RATE_LIMIT_WITHDRAW);
-
-        // Flash-loan protection: enforce minimum holding period (#659, #894).
-        // If the owner has configured a non-zero MinHoldingPeriod, reject any
-        // withdrawal attempted before `last_deposit_ledger + min_holding_period`.
-        let min_holding: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::MinHoldingPeriod)
-            .unwrap_or(0_u32);
-        if min_holding > 0 {
-            if let Some(last_deposit_ledger) = env
-                .storage()
-                .persistent()
-                .get::<DataKey, u32>(&DataKey::LastDepositLedger(user.clone()))
-            {
-                let current_ledger = env.ledger().sequence();
-                let elapsed = current_ledger.saturating_sub(last_deposit_ledger);
-                if elapsed < min_holding {
-                    env.events().publish(
-                        (symbol_short!("fl_block"), user.clone()),
-                        FlashLoanProtectionTriggeredEvent {
-                            user: user.clone(),
-                            last_deposit_ledger,
-                            current_ledger,
-                            min_holding_period: min_holding,
-                        },
-                    );
-                    panic_with_error!(&env, VaultError::HoldingPeriodNotElapsed);
-                }
-            }
-        }
-
-        // Check if user has locked shares (#636)
-        let locked_shares: i128 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::LockedShares(user.clone()))
-            .unwrap_or(0_i128);
-
-        let user_shares: i128 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Shares(user.clone()))
-            .unwrap_or(0_i128);
-
-        // If user has locked shares, only withdraw unlocked shares
-        let shares_to_withdraw = if locked_shares > 0 {
-            let unlocked_shares = user_shares - locked_shares;
-            if unlocked_shares == 0 {
-                panic_with_error!(&env, VaultError::InsufficientShares);
-            }
-            unlocked_shares
-        } else {
-            user_shares
-        };
-
-        // Check if funds are deployed in Blend and need to be retrieved
-        let current_protocol: Symbol = env
-            .storage()
-            .instance()
-            .get(&DataKey::CurrentProtocol)
-            .unwrap_or(symbol_short!("none"));
-
-        let usdc_token: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
-        let token_client = token::Client::new(&env, &usdc_token);
-
-        Self::require(&env, shares_to_withdraw > 0, VaultError::NoSharesToWithdraw);
-
-        let total_shares = Self::get_total_shares_internal(&env);
-        let total_assets = Self::get_total_assets_internal(&env);
-        Self::require(
-            &env,
-            total_shares > 0 && total_assets > 0,
-            VaultError::NoAssetsToWithdraw,
-        );
-
-        // Calculate assets user is entitled to based on their shares
-        let entitled_amount = Self::convert_to_assets_internal(&env, shares_to_withdraw);
-        let mut usdc_to_return = entitled_amount;
-        let mut shares_to_burn = shares_to_withdraw;
-
-        if current_protocol == symbol_short!("blend")
-            || current_protocol == symbol_short!("dex")
-            || current_protocol == symbol_short!("multi")
-        {
-            // Check vault's USDC balance
-            let vault_balance = token_client.balance(&env.current_contract_address());
-
-            // If vault doesn't have enough USDC, try to withdraw from the active protocol
-            if vault_balance < entitled_amount {
-                // Attempt to withdraw from the active protocol (Blend or DEX)
-                let needed = entitled_amount
-                    .checked_sub(vault_balance)
-                    .expect("vault: withdrawal underflow");
-                let _ = Self::withdraw_amount_from_protocol(&env, &current_protocol, needed, 0);
-
-                // RECONCILIATION: Check actual available USDC after the potential withdrawal
-                let available_usdc = token_client.balance(&env.current_contract_address());
-
-                // If vault has less than entitled, we cap the withdrawal.
-                // The user receives what's available and keeps their remaining shares.
-                if available_usdc < entitled_amount {
-                    usdc_to_return = available_usdc;
-                    Self::require(&env, usdc_to_return > 0, VaultError::NoLiquidityAvailable);
-                    // Use ceiling division to prevent dust attacks (ensure at least 1 share burned).
-                    shares_to_burn = Self::convert_to_shares_internal_ceil(&env, usdc_to_return);
-                }
-            }
-        }
-
-        Self::require(&env, usdc_to_return > 0, VaultError::NoAssetsToReturn);
-        Self::require(&env, shares_to_burn > 0, VaultError::NoSharesToBurn);
-
-        // Update user shares
-        let new_user_shares = user_shares
-            .checked_sub(shares_to_burn)
-            .expect("vault: withdrawal underflow");
-        env.storage()
-            .persistent()
-            .set(&DataKey::Shares(user.clone()), &new_user_shares);
-
-        // Prune user from index when shares reach zero (Issue #440)
-        if new_user_shares == 0 {
-            Self::prune_user_from_index(&env, &user);
-        }
-
-        // Update total shares
-        let new_total_shares = total_shares
-            .checked_sub(shares_to_burn)
-            .expect("vault: withdrawal underflow");
-        env.storage()
-            .instance()
-            .set(&DataKey::TotalShares, &new_total_shares);
-
-        // Update total assets
-        let new_total_assets = total_assets
-            .checked_sub(usdc_to_return)
-            .expect("vault: withdrawal underflow");
-        env.storage()
-            .instance()
-            .set(&DataKey::TotalAssets, &new_total_assets);
-
-        Self::reduce_total_deposits_on_withdraw(&env, usdc_to_return);
-
-        // Transfer USDC to user
-        let usdc_token: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
-        let token_client = token::Client::new(&env, &usdc_token);
-        token_client.transfer(&env.current_contract_address(), &user, &usdc_to_return);
+        let (paid, burned) = Self::burn_and_pay(&env, &user, 0, BurnAndPayMode::All);
 
         env.events().publish(
             (TOPIC_WITHDRAW, user.clone()),
             WithdrawEvent {
-                user,
-                amount: usdc_to_return,
-                shares: shares_to_burn,
+                user: user.clone(),
+                amount: paid,
+                shares: burned,
             },
         );
 
-        usdc_to_return
+        paid
     }
 
     /// Sets the Blend pool contract address for on-chain integration.
@@ -4005,116 +3686,17 @@ impl NeuroWealthVault {
 
         let usdc_token: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
         let token_client = token::Client::new(&env, &usdc_token);
-
-        // Check vault's idle USDC balance
         let vault_balance = token_client.balance(&env.current_contract_address());
-        let mut from_idle = false;
-        let mut actual_to_return = amount;
-
-        // If vault doesn't have enough idle USDC, try to withdraw from protocol
-        if vault_balance < amount {
-            let current_protocol: Symbol = env
-                .storage()
-                .instance()
-                .get(&DataKey::CurrentProtocol)
-                .unwrap_or(symbol_short!("none"));
-
-            if current_protocol == symbol_short!("blend")
-            || current_protocol == symbol_short!("dex")
-            || current_protocol == symbol_short!("multi")
-        {
-                // Calculate how much we need to withdraw
-                let needed = amount
-                    .checked_sub(vault_balance)
-                    .expect("vault: withdrawal underflow");
-
-                // Attempt to withdraw from the active protocol
-                let _withdrawn =
-                    Self::withdraw_amount_from_protocol(&env, &current_protocol, needed, 0);
-
-                // Check actual available USDC after the withdrawal
-                let available_usdc = token_client.balance(&env.current_contract_address());
-                actual_to_return = min(amount, available_usdc);
-            } else {
-                actual_to_return = vault_balance;
-            }
-        } else {
-            from_idle = true;
-        }
-
-        Self::require(
-            &env,
-            actual_to_return > 0,
-            VaultError::InsufficientLiquidity,
-        );
-
-        // Share-based withdrawal
-        let user_shares: i128 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Shares(user.clone()))
-            .unwrap_or(0_i128);
-        Self::require(&env, user_shares > 0, VaultError::InsufficientShares);
-
-        let total_shares = Self::get_total_shares_internal(&env);
-        let total_assets = Self::get_total_assets_internal(&env);
-        Self::require(
-            &env,
-            total_shares > 0 && total_assets > 0,
-            VaultError::NoAssetsToWithdraw,
-        );
-
-        // Use ceiling division to prevent dust attacks
-        let shares_to_burn = Self::convert_to_shares_internal_ceil(&env, actual_to_return);
-        Self::require(
-            &env,
-            shares_to_burn > 0,
-            VaultError::SharesToBurnMustBePositive,
-        );
-        Self::require(
-            &env,
-            user_shares >= shares_to_burn,
-            VaultError::InsufficientSharesForAmount,
-        );
-
-        // Calculate actual assets to return based on burned shares
-        let usdc_to_return = Self::convert_to_assets_internal(&env, shares_to_burn);
-
-        // Update user shares and total shares
-        let new_user_shares = user_shares
-            .checked_sub(shares_to_burn)
-            .expect("vault: withdrawal underflow");
-        env.storage()
-            .persistent()
-            .set(&DataKey::Shares(user.clone()), &new_user_shares);
-
-        let new_total_shares = total_shares
-            .checked_sub(shares_to_burn)
-            .expect("vault: withdrawal underflow");
-        env.storage()
-            .instance()
-            .set(&DataKey::TotalShares, &new_total_shares);
-
-        // Update total assets
-        let new_total_assets = total_assets
-            .checked_sub(usdc_to_return)
-            .expect("vault: withdrawal underflow");
-        env.storage()
-            .instance()
-            .set(&DataKey::TotalAssets, &new_total_assets);
-
-        Self::reduce_total_deposits_on_withdraw(&env, usdc_to_return);
-
-        // Transfer USDC to user
-        token_client.transfer(&env.current_contract_address(), &user, &usdc_to_return);
+        let from_idle = vault_balance >= amount;
+        let (paid, burned) = Self::burn_and_pay(&env, &user, amount, BurnAndPayMode::Emergency);
 
         // Emit emergency withdrawal event
         env.events().publish(
             (TOPIC_EMERGENCY_WITHDRAWAL, user.clone()),
             EmergencyWithdrawalEvent {
                 user: user.clone(),
-                amount: usdc_to_return,
-                shares: shares_to_burn,
+                amount: paid,
+                shares: burned,
                 from_idle,
             },
         );
@@ -4185,30 +3767,7 @@ impl NeuroWealthVault {
             VaultError::InvalidStrategy,
         );
 
-        // ── Rebalance cooldown guard (Issue #59) ──────────────────────────────
-        // If a minimum interval has been configured by the owner, enforce it.
-        // Only applies after the first rebalance — if LastRebalanceLedger has
-        // never been written, there is no prior call to measure elapsed time from.
-        if let Some(min_interval) = env
-            .storage()
-            .instance()
-            .get::<DataKey, u32>(&DataKey::MinRebalanceInterval)
-        {
-            if min_interval > 0 {
-                if let Some(last_rebalance) = env
-                    .storage()
-                    .instance()
-                    .get::<DataKey, u32>(&DataKey::LastRebalanceLedger)
-                {
-                    let current_ledger = env.ledger().sequence();
-                    let elapsed = current_ledger.saturating_sub(last_rebalance);
-                    if elapsed < min_interval {
-                        panic_with_error!(&env, VaultError::RebalanceCooldownActive);
-                    }
-                }
-            }
-        }
-        // ─────────────────────────────────────────────────────────────────────
+        Self::require_rebalance_cooldown_elapsed(&env);
 
         if min_out < 0 {
             panic_with_error!(&env, VaultError::MinOutMustBeNonNegative);
@@ -4721,25 +4280,7 @@ impl NeuroWealthVault {
             panic_with_error!(&env, VaultError::MinOutMustBeNonNegative);
         }
 
-        // ── Rebalance cooldown guard (Issue #59) ──────────────────────────────
-        if let Some(min_interval) = env
-            .storage()
-            .instance()
-            .get::<DataKey, u32>(&DataKey::MinRebalanceInterval)
-        {
-            if min_interval > 0 {
-                if let Some(last_rebalance) = env
-                    .storage()
-                    .instance()
-                    .get::<DataKey, u32>(&DataKey::LastRebalanceLedger)
-                {
-                    let elapsed = env.ledger().sequence().saturating_sub(last_rebalance);
-                    if elapsed < min_interval {
-                        panic_with_error!(&env, VaultError::RebalanceCooldownActive);
-                    }
-                }
-            }
-        }
+        Self::require_rebalance_cooldown_elapsed(&env);
 
         // A venue with a non-zero allocation must have a pool configured.
         if blend_bps > 0 && !env.storage().instance().has(&DataKey::BlendPool) {
@@ -4903,26 +4444,7 @@ impl NeuroWealthVault {
             panic_with_error!(&env, VaultError::MinOutMustBeNonNegative);
         }
 
-        // Cooldown check
-        if let Some(min_interval) = env
-            .storage()
-            .instance()
-            .get::<DataKey, u32>(&DataKey::MinRebalanceInterval)
-        {
-            if min_interval > 0 {
-                if let Some(last_rebalance) = env
-                    .storage()
-                    .instance()
-                    .get::<DataKey, u32>(&DataKey::LastRebalanceLedger)
-                {
-                    let current_ledger = env.ledger().sequence();
-                    let elapsed = current_ledger.saturating_sub(last_rebalance);
-                    if elapsed < min_interval {
-                        panic_with_error!(&env, VaultError::RebalanceCooldownActive);
-                    }
-                }
-            }
-        }
+        Self::require_rebalance_cooldown_elapsed(&env);
 
         let current_protocol: Symbol = env
             .storage()
@@ -5144,26 +4666,7 @@ impl NeuroWealthVault {
             panic_with_error!(&env, VaultError::MinOutMustBeNonNegative);
         }
 
-        // Cooldown check (same as rebalance / harvest)
-        if let Some(min_interval) = env
-            .storage()
-            .instance()
-            .get::<DataKey, u32>(&DataKey::MinRebalanceInterval)
-        {
-            if min_interval > 0 {
-                if let Some(last_rebalance) = env
-                    .storage()
-                    .instance()
-                    .get::<DataKey, u32>(&DataKey::LastRebalanceLedger)
-                {
-                    let current_ledger = env.ledger().sequence();
-                    let elapsed = current_ledger.saturating_sub(last_rebalance);
-                    if elapsed < min_interval {
-                        panic_with_error!(&env, VaultError::RebalanceCooldownActive);
-                    }
-                }
-            }
-        }
+        Self::require_rebalance_cooldown_elapsed(&env);
 
         let current_protocol: Symbol = env
             .storage()
@@ -10788,6 +10291,204 @@ impl NeuroWealthVault {
         }
     }
 
+    fn burn_and_pay(
+        env: &Env,
+        user: &Address,
+        assets_requested: i128,
+        mode: BurnAndPayMode,
+    ) -> (i128, i128) {
+        let user_shares: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Shares(user.clone()))
+            .unwrap_or(0_i128);
+        let no_shares_error = if mode == BurnAndPayMode::All {
+            VaultError::NoSharesToWithdraw
+        } else {
+            VaultError::InsufficientShares
+        };
+        Self::require(env, user_shares > 0, no_shares_error);
+
+        let locked_shares: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::LockedShares(user.clone()))
+            .unwrap_or(0_i128);
+        let shares_for_redemption = if mode == BurnAndPayMode::All && locked_shares > 0 {
+            let unlocked_shares = user_shares - locked_shares;
+            Self::require(
+                env,
+                unlocked_shares > 0,
+                VaultError::InsufficientShares,
+            );
+            unlocked_shares
+        } else {
+            user_shares
+        };
+
+        if mode != BurnAndPayMode::Emergency {
+            let min_holding: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::MinHoldingPeriod)
+                .unwrap_or(0_u32);
+            if min_holding > 0 {
+                if let Some(last_deposit_ledger) = env
+                    .storage()
+                    .persistent()
+                    .get::<DataKey, u32>(&DataKey::LastDepositLedger(user.clone()))
+                {
+                    let current_ledger = env.ledger().sequence();
+                    let elapsed = current_ledger.saturating_sub(last_deposit_ledger);
+                    if elapsed < min_holding {
+                        env.events().publish(
+                            (symbol_short!("fl_block"), user.clone()),
+                            FlashLoanProtectionTriggeredEvent {
+                                user: user.clone(),
+                                last_deposit_ledger,
+                                current_ledger,
+                                min_holding_period: min_holding,
+                            },
+                        );
+                        panic_with_error!(env, VaultError::HoldingPeriodNotElapsed);
+                    }
+                }
+            }
+        }
+
+        let total_shares = Self::get_total_shares_internal(env);
+        let total_assets = Self::get_total_assets_internal(env);
+        Self::require(
+            env,
+            total_shares > 0 && total_assets > 0,
+            VaultError::NoAssetsToWithdraw,
+        );
+
+        let requested = if mode == BurnAndPayMode::All {
+            Self::convert_to_assets_internal(env, shares_for_redemption)
+        } else {
+            assets_requested
+        };
+
+        if mode == BurnAndPayMode::Requested && locked_shares > 0 {
+            let unlocked_shares = user_shares - locked_shares;
+            let max_withdrawable = Self::convert_to_assets_internal(env, unlocked_shares);
+            Self::require(
+                env,
+                requested <= max_withdrawable,
+                VaultError::InsufficientShares,
+            );
+        }
+
+        let current_protocol: Symbol = env
+            .storage()
+            .instance()
+            .get(&DataKey::CurrentProtocol)
+            .unwrap_or(symbol_short!("none"));
+        let usdc_token: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
+        let token_client = token::Client::new(env, &usdc_token);
+        let vault_address = env.current_contract_address();
+        let vault_balance = token_client.balance(&vault_address);
+        let mut assets_to_pay = requested;
+
+        if vault_balance < requested {
+            let active_protocol = current_protocol == symbol_short!("blend")
+                || current_protocol == symbol_short!("dex")
+                || current_protocol == symbol_short!("multi");
+            if active_protocol {
+                let needed = requested
+                    .checked_sub(vault_balance)
+                    .expect("vault: withdrawal underflow");
+                Self::withdraw_amount_from_protocol(env, &current_protocol, needed, 0);
+                let available = token_client.balance(&vault_address);
+                assets_to_pay = min(requested, available);
+            } else if mode == BurnAndPayMode::Emergency {
+                assets_to_pay = vault_balance;
+            }
+        }
+
+        match mode {
+            BurnAndPayMode::Requested => {
+                Self::require(env, assets_to_pay > 0, VaultError::InsufficientLiquidity);
+            }
+            BurnAndPayMode::All => {
+                Self::require(env, assets_to_pay > 0, VaultError::NoLiquidityAvailable);
+            }
+            BurnAndPayMode::Emergency => {
+                Self::require(env, assets_to_pay > 0, VaultError::InsufficientLiquidity);
+            }
+        }
+
+        let shares_to_burn = if mode == BurnAndPayMode::All && assets_to_pay == requested {
+            shares_for_redemption
+        } else {
+            Self::convert_to_shares_internal_ceil(env, assets_to_pay)
+        };
+        Self::require(env, shares_to_burn > 0, VaultError::SharesToBurnMustBePositive);
+        Self::require(
+            env,
+            user_shares >= shares_to_burn,
+            VaultError::InsufficientSharesForAmount,
+        );
+
+        let paid = if mode == BurnAndPayMode::All && assets_to_pay < requested {
+            assets_to_pay
+        } else {
+            Self::convert_to_assets_internal(env, shares_to_burn)
+        };
+        Self::require(env, paid > 0, VaultError::NoAssetsToReturn);
+
+        let new_user_shares = user_shares
+            .checked_sub(shares_to_burn)
+            .expect("vault: withdrawal underflow");
+        env.storage()
+            .persistent()
+            .set(&DataKey::Shares(user.clone()), &new_user_shares);
+        if new_user_shares == 0 {
+            Self::prune_user_from_index(env, user);
+        }
+
+        let new_total_shares = total_shares
+            .checked_sub(shares_to_burn)
+            .expect("vault: withdrawal underflow");
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalShares, &new_total_shares);
+
+        let new_total_assets = total_assets
+            .checked_sub(paid)
+            .expect("vault: withdrawal underflow");
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalAssets, &new_total_assets);
+        Self::reduce_total_deposits_on_withdraw(env, paid);
+        token_client.transfer(&vault_address, user, &paid);
+
+        (paid, shares_to_burn)
+    }
+
+    /// Enforces the configured interval since the last rebalance-like operation.
+    fn require_rebalance_cooldown_elapsed(env: &Env) {
+        if let Some(min_interval) = env
+            .storage()
+            .instance()
+            .get::<DataKey, u32>(&DataKey::MinRebalanceInterval)
+        {
+            if min_interval > 0 {
+                if let Some(last_rebalance) = env
+                    .storage()
+                    .instance()
+                    .get::<DataKey, u32>(&DataKey::LastRebalanceLedger)
+                {
+                    let elapsed = env.ledger().sequence().saturating_sub(last_rebalance);
+                    if elapsed < min_interval {
+                        panic_with_error!(env, VaultError::RebalanceCooldownActive);
+                    }
+                }
+            }
+        }
+    }
+
     /// Updates [`DataKey::CurrentProtocol`] and emits [`ProtocolChangedEvent`] on change.
     fn set_current_protocol(env: &Env, new_protocol: Symbol) {
         let old_protocol: Symbol = env
@@ -11005,14 +10706,6 @@ impl NeuroWealthVault {
 
         Self::require_min_out(env, withdrawn, min_out, "blend withdraw");
 
-        if withdrawn > 0 {
-            let remaining =
-                BlendPoolClient::get_balance(env, &pool_address, &usdc_token, &vault_address);
-            if remaining == 0 {
-                Self::set_current_protocol(env, symbol_short!("none"));
-            }
-        }
-
         // Emit event for withdrawal
         env.events().publish(
             (TOPIC_BLEND_WITHDRAW,),
@@ -11208,14 +10901,6 @@ impl NeuroWealthVault {
 
         Self::require_min_out(env, withdrawn, min_out, "dex withdraw");
 
-        if withdrawn > 0 {
-            let remaining =
-                DexPoolClient::get_balance(env, &pool_address, &usdc_token, &vault_address);
-            if remaining == 0 {
-                Self::set_current_protocol(env, symbol_short!("none"));
-            }
-        }
-
         env.events().publish(
             (TOPIC_DEX_WITHDRAW,),
             DexWithdrawEvent {
@@ -11253,8 +10938,7 @@ impl NeuroWealthVault {
             // Multi-protocol mode: fully exit both venues.
             let blend = Self::withdraw_from_blend(env, 0, min_out);
             let dex = Self::withdraw_from_dex(env, 0, min_out);
-            let (b, d) = Self::sync_deployed_split(env);
-            Self::set_current_protocol(env, Self::derive_protocol_summary(b, d));
+            Self::sync_deployed_split(env);
             blend.saturating_add(dex)
         } else {
             0
@@ -11493,9 +11177,7 @@ impl NeuroWealthVault {
             recovered = recovered.saturating_add(Self::withdraw_from_dex(env, from_dex, min_out));
         }
 
-        let (blend_after, dex_after) = Self::sync_deployed_split(env);
-        Self::set_current_protocol(env, Self::derive_protocol_summary(blend_after, dex_after));
-
+        Self::sync_deployed_split(env);
         recovered
     }
 
