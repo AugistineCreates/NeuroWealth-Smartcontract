@@ -42,6 +42,7 @@ contract's limits, and replies with TwiML in the same HTTP response. Users get a
 |---|---|
 | `src/index.ts` | Express bootstrap, `dotenv`, body parsers, `GET /health`, `POST /api/whatsapp/webhook`. |
 | `src/webhook.ts` | Twilio handler and conversation state machine; builds TwiML replies. |
+| `src/webhookIdempotency.ts` | Idempotency key derivation and the `whatsapp_inbound_webhooks` processing ledger that makes redelivered webhooks run at most once. |
 | `src/stateManager.ts` | In-memory sessions (`UNVERIFIED` → `AWAITING_OTP` → `VERIFIED`), 15-minute inactivity reset, fixed-window rate limit (10 messages / 60 s per phone). |
 | `src/otpService.ts` | 6-digit OTP from `crypto.randomInt`, 5-minute TTL, max 3 attempts. |
 | `src/walletService.ts` | Creates a custodial `Keypair` per verified phone; stores only the public key and the encrypted secret. |
@@ -63,6 +64,37 @@ contract's limits, and replies with TwiML in the same HTTP response. Users get a
    - `WITHDRAW` → `handleWithdraw(amount | all)`
    - `STRATEGY` → strategy confirmation (applied by the agent on its next run)
 4. After 15 minutes without a message the session drops back to `UNVERIFIED`.
+
+## Idempotent webhook processing
+
+Twilio can redeliver the same inbound webhook after a timeout. Each delivery
+is keyed by `twilio:inbound-message:<AccountSid>:<MessageSid>` (falling back to
+the `I-Twilio-Idempotency-Token` header), and a row in
+`whatsapp_inbound_webhooks` is claimed with an atomic upsert **before** the
+command runs, inside the per-phone command lock.
+
+| Delivery sees | Response | Command re-run? |
+|---|---|---|
+| new key | normal TwiML reply | runs once |
+| `completed` | `200`, empty `<Response/>` (no second reply) | no |
+| `processing`, lease live (another worker) | `409` | no, a later redelivery sees the result |
+| `failed` (retryable, before side effects) | resumes as a new attempt | yes, safe |
+| `processing`, lease expired, no side effects | resumes as a new attempt | yes, safe |
+| `processing`, lease expired, side effects started | `200`, empty; row → `abandoned` | no, needs manual reconciliation |
+
+The handler calls `SideEffectGuard.begin()` (persisting `side_effects_started`)
+immediately before any state-changing step: OTP issue/verify, wallet creation,
+deposit, withdraw, strategy change. A transient error (connection refused,
+timeout, PostgreSQL class `08`, serialization failure, ...) raised before that
+point marks the row `failed` and returns `503` so the next delivery retries.
+Any error after it becomes the usual user-facing error reply and the row is
+`completed`, because the command may already have partially applied.
+
+`attempt_count` is a fencing token: a worker whose lease was taken over cannot
+mark side effects or complete the newer attempt. Reply text is never stored
+(it can contain OTP codes), so a duplicate is acknowledged without replaying
+the reply. Webhooks with neither a MessageSid nor an idempotency token are
+processed without deduplication and logged as a warning.
 
 ## Intent validation against contract caps (#771)
 
@@ -108,6 +140,8 @@ at startup.
 | `VAULT_MAX_DEPOSIT` | no | `10000000000` (1,000 USDC) | Max single deposit, in stroops. Mirror `get_max_deposit`. |
 | `VAULT_USER_DEPOSIT_CAP` | no | `10000000000` (1,000 USDC) | Per-user cap, in stroops. Mirror `get_user_deposit_cap`. |
 | `VAULT_TVL_CAP` | no | `100000000000` (10,000 USDC) | Vault TVL cap, in stroops. Mirror `get_tvl_cap`. |
+| `DATABASE_URL` | yes | `postgresql://postgres:postgres@localhost:5432/neurowealth` | Postgres holding `whatsapp_wallets`, `whatsapp_message_deliveries` and `whatsapp_inbound_webhooks`. |
+| `WHATSAPP_WEBHOOK_LEASE_MS` | no | `120000` | How long a processing attempt holds an inbound webhook before a redelivery may take it over. Keep it well above the slowest command. |
 
 Invalid `VAULT_*` values (non-integer, zero or negative) make `validateIntent`
 throw, so the webhook replies with the generic error message rather than
