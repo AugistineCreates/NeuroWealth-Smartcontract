@@ -17,6 +17,7 @@ import type { Request, Response } from 'express';
 import type { Server } from 'node:http';
 import { MetricsEngine, MetricsSnapshot, MetricAlert } from './metrics';
 import logger from './logger';
+import { getDatabaseRetryMetrics } from './retry';
 
 export function createMetricsApp(engine: MetricsEngine): express.Express {
   const app = express();
@@ -43,6 +44,10 @@ export function createMetricsApp(engine: MetricsEngine): express.Express {
   app.get('/api/metrics/alerts', (_req: Request, res: Response) => {
     const alerts: MetricAlert[] = engine.checkAlerts();
     res.json({ generatedAt: Date.now(), alerts });
+  });
+
+  app.get('/api/metrics/database-retries', (_req: Request, res: Response) => {
+    res.json(getDatabaseRetryMetrics());
   });
 
   return app;

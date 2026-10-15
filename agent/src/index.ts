@@ -42,7 +42,7 @@ async function autoCompound(minOut: number = 0, mode: 'live' | 'dry-run'): Promi
     throw new Error("VAULT_ADDRESS environment variable is not set");
   }
 
-  console.log(`Auto-compounding yield on vault ${vaultAddress} with min_out=${minOut}`);
+  logger.info({ vaultAddress, minOut }, 'Auto-compounding yield');
 
   await submitAutoCompoundTx(minOut, mode);
 }
@@ -79,11 +79,11 @@ function startDecisionLoop(executionMode: 'live' | 'dry-run') {
       );
 
       if (usersEvaluated > 0 && !rebalanceNeeded) {
-        console.log(`Hourly check: Yield is optimal. No action needed.`);
+        logger.info('Hourly check: Yield is optimal; no action needed');
         // Yield is already in the best protocol; compound it for maximum growth
         await autoCompound(0, executionMode);
       } else if (usersEvaluated > 0 && rebalanceNeeded) {
-        console.log(`Hourly check: Rebalance needed.`);
+        logger.info('Hourly check: Rebalance needed');
         const currentAllocation = cycle.currentAllocation;
         
         // Batch rebalances: iterate through decisions and trigger rebalance for target protocols.

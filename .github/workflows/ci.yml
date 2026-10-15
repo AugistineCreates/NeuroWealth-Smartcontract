@@ -303,6 +303,46 @@ jobs:
           path: ${{ env.WASM_FILE }}
           retention-days: 14
 
+  frontend-e2e:
+    name: Frontend Vault Journey Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser smoke suite
+        working-directory: frontend
+        run: npm run test:e2e
+        env:
+          CI: true
+
+      - name: Upload browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-vault-journey-failure-artifacts
+          path: frontend/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
   kani-share-math:
     name: Kani Share-Accounting Proofs
     runs-on: ubuntu-latest
@@ -599,7 +639,6 @@ jobs:
             stellar --version
             exit 0
           fi
-
           mkdir -p "$HOME/.local/bin"
           curl -sSL "https://github.com/stellar/stellar-cli/releases/download/v${VERSION}/stellar-cli-${VERSION}-x86_64-unknown-linux-gnu.tar.gz" | tar -xz
           mv stellar "$HOME/.local/bin/stellar"

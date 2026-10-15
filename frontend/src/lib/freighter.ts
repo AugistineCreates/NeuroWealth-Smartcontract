@@ -4,6 +4,7 @@ import {
   signTransaction as signFreighterTx,
   getNetworkDetails
 } from '@stellar/freighter-api';
+import { getBrowserTestHarness } from './browserTestHarness';
 
 export interface FreighterWalletState {
   isConnected: boolean;
@@ -76,6 +77,9 @@ export async function isFreighterInstalled(): Promise<boolean> {
  * Non-custodial signing model - private keys never enter web app.
  */
 export async function connectFreighterWallet(): Promise<string | null> {
+  const testHarness = getBrowserTestHarness();
+  if (testHarness) return testHarness.connectWallet();
+
   try {
     const installed = await isFreighterInstalled();
     if (!installed) {
@@ -106,14 +110,17 @@ export async function signWithFreighter(xdr: string, networkPassphrase?: string)
       throw new Error('Network passphrase is not configured in the environment.');
     }
 
-    const networkDetails = await getNetworkDetails();
+    const testHarness = getBrowserTestHarness();
+    const networkDetails = testHarness
+      ? await testHarness.getNetworkDetails()
+      : await getNetworkDetails();
     if (networkDetails.networkPassphrase !== requiredPassphrase) {
       throw new Error(`Freighter is connected to the wrong network. Expected network passphrase: ${requiredPassphrase}`);
     }
 
-    const signedXdr = await signFreighterTx(xdr, {
-      networkPassphrase: requiredPassphrase
-    });
+    const signedXdr = testHarness
+      ? await testHarness.signTransaction(xdr, requiredPassphrase)
+      : await signFreighterTx(xdr, { networkPassphrase: requiredPassphrase });
     return signedXdr;
   } catch (err) {
     console.error('Wallet signing failed:', err);

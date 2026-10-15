@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { openAiKeyManager } from './openAiKeyManager';
+import logger from './logger';
 
 export interface ParsedIntent {
   action: 'deposit' | 'withdraw' | 'balance' | 'earnings' | 'switch_strategy' | 'get_apy';
@@ -61,7 +62,7 @@ Only output valid JSON matching this exact schema. If the user wants to withdraw
 
     return parsed;
   } catch (error) {
-    console.error("Error parsing intent:", error);
+    logger.error({ errorType: error instanceof Error ? error.name : 'UnknownError' }, 'Failed to parse intent');
     throw error;
   }
 }

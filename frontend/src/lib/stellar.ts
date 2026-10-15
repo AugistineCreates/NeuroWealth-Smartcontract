@@ -1,4 +1,5 @@
 import { Account, Address, Contract, rpc, scValToNative, TransactionBuilder, xdr } from '@stellar/stellar-sdk';
+import { getBrowserTestHarness } from './browserTestHarness';
 
 function requirePublicEnv(name: string): string {
   const value = process.env[name];
@@ -12,7 +13,9 @@ const RPC_URL = requirePublicEnv('NEXT_PUBLIC_SOROBAN_RPC_URL');
 const NETWORK_PASSPHRASE = requirePublicEnv('NEXT_PUBLIC_SOROBAN_NETWORK_PASSPHRASE');
 const VAULT_CONTRACT_ID = requirePublicEnv('NEXT_PUBLIC_VAULT_CONTRACT_ID');
 
-export const server = new rpc.Server(RPC_URL);
+export const server = new rpc.Server(RPC_URL, {
+  allowHttp: process.env.NEXT_PUBLIC_E2E_TESTS === 'true',
+});
 export const networkPassphrase = NETWORK_PASSPHRASE;
 
 export interface VaultState {
@@ -33,6 +36,9 @@ export async function simulateContractCall(
   args: xdr.ScVal[] = [],
   callerAddress: string,
 ): Promise<unknown> {
+  const testHarness = getBrowserTestHarness();
+  if (testHarness) return testHarness.simulateContractCall(method);
+
   const account = new Account(callerAddress, '0');
   const contract = new Contract(VAULT_CONTRACT_ID);
   const tx = new TransactionBuilder(account, {
