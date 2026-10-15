@@ -72,7 +72,7 @@ Persistent storage is used for per-user data that requires efficient access.
 | --- | ---------------------------- | --------------- | ------------------------------------------------------------------- |
 |     | `Shares(Address)`            | i128            | User's share balance (proportional ownership)                       |
 |     | `UserStrategy(Address)`      | Symbol          | Per-user strategy preference ("conservative", "balanced", "growth") |
-|     | `LockedShares(Address)`      | i128            | Shares locked for boosted APY (Issue #636)                          |
+|     | `LockedShares(Address)`      | i128            | Shares locked by the user (Issue #636)                              |
 |     | `LockExpiry(Address)`        | u32             | Ledger when the user's locked shares unlock (Issue #636)            |
 |     | `LastDepositLedger(Address)` | u32             | Ledger of the user's most recent deposit (Issue #659)               |
 |     | `DepositSnapshot(Address)`   | DepositSnapshot | First-deposit snapshot for realized-APY computation (Issue #462)    |
@@ -228,7 +228,7 @@ pub enum DataKey {
     UserSharesIndex,      // append-only Vec<Address> of share holders (#440)
     MigrationTarget,      // target vault for share migration (#637)
     MigrationPaused,      // migration-only pause flag (#637)
-    LockedShares(Address),// user -> shares locked for boosted APY (#636)
+    LockedShares(Address),// user -> shares locked by the user (#636)
     ApyPrediction(Symbol),// protocol -> latest ML APY prediction (#650)
     CumulativeMevLoss,    // total suspected MEV loss (#658)
     MevIncidentCount,     // number of suspected MEV incidents (#658)
@@ -1632,14 +1632,14 @@ The `NeuroWealthVault` contract interacts with three categories of external smar
 
 | Key                     | Type | Description                                             |
 | ----------------------- | ---- | ------------------------------------------------------- |
-| `LockedShares(Address)` | i128 | User's locked shares for boosted APY (#636)             |
+| `LockedShares(Address)` | i128 | User's locked shares (#636)                             |
 | `LockExpiry(Address)`   | u32  | Ledger when user's locked shares can be unlocked (#636) |
 
 ### Updated Access Patterns
 
 | Key                  | Category   | Writers                           | Readers                                | TTL                |
 | -------------------- | ---------- | --------------------------------- | -------------------------------------- | ------------------ |
-| `MigrationTarget`    | Instance   | Owner (set_migration_target)      | Everyone                               | None               |
+| `MigrationTarget`    | Instance   | Owner (schedule/execute_migration_target) | Everyone                               | None               |
 | `MigrationPaused`    | Instance   | Owner (set_migration_paused)      | Everyone                               | None               |
 | `LockedShares(user)` | Persistent | User (lock_shares, unlock_shares) | User, get_locked_shares                | Automatic on write |
 | `LockExpiry(user)`   | Persistent | User (lock_shares)                | User, unlock_shares, get_locked_shares | Automatic on write |
@@ -1656,7 +1656,7 @@ The `NeuroWealthVault` contract interacts with three categories of external smar
 **New Persistent Storage Keys (lines 50-51):**
 
 ```markdown
-| `LockedShares(Address)` | i128 | User's locked shares for boosted APY (#636) |
+| `LockedShares(Address)` | i128 | User's locked shares (#636) |
 | `LockExpiry(Address)` | u32 | Ledger when user's locked shares can be unlocked (#636) |
 ```
 
@@ -1687,17 +1687,17 @@ The `NeuroWealthVault` contract interacts with three categories of external smar
 - Does not affect rebalance or admin operations
 - Maintains same rounding and accounting rules as regular withdrawals
 
-### Share Locking for Boosted APY (#636)
+### Share Locking (#636)
 
-**Purpose**: Allows users to voluntarily lock shares for configurable periods in exchange for boosted APY, similar to ve-tokenomics patterns.
+**Purpose**: Allows users to voluntarily lock shares for a fixed period.
 
 **Key Features**:
 
-- Three lock duration tiers: 30 days (1.1x), 90 days (1.25x), 180 days (1.5x)
+- Three lock durations: 30, 90 and 180 days
 - Locked shares cannot be withdrawn until lock period expires
 - Withdraw functions respect lock state (only unlocked shares can be withdrawn)
-- Boost multiplier affects share price calculation
 - Users can unlock shares after expiry
+- Locking does not boost yield yet. Locked and unlocked shares earn the same share-price growth (#971)
 
 **Storage**:
 
@@ -1722,7 +1722,7 @@ The `NeuroWealthVault` contract interacts with three categories of external smar
 
 **Key Features**:
 
-- Owner sets migration target address
+- Owner schedules a migration target, which only takes effect after a ~24 h timelock (same delay as upgrades, #969)
 - Users can migrate shares independently
 - Exchange rate preserved through conversion calculation
 - Migration can be paused independently of main vault pause
@@ -1736,12 +1736,15 @@ The `NeuroWealthVault` contract interacts with three categories of external smar
 **Events**:
 
 - `SharesMigratedEvent` (topic `"migrate"`)
+- `MigrationTargetScheduledEvent` (topic `"mig_sched"`)
+- `MigrationTargetCancelledEvent` (topic `"mig_cncl"`)
 - `MigrationTargetUpdatedEvent` (topic `"mig_tgt"`)
 - `MigrationPausedEvent` (topic `"mig_pse"`)
 
 **Security Considerations**:
 
 - Migration target must be owner-set (prevents malicious contracts)
+- Target changes are timelocked, so users can see a change coming and exit before it applies; the owner can cancel during the window
 - Migration can be paused independently for safety
 - Exchange rate calculated at migration time to preserve value
 - User authentication required for migration
