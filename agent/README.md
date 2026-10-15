@@ -31,6 +31,10 @@ Key environment variables include:
 - `SOROBAN_PUBLIC_KEY` — optional source account for dry-run simulations when no signing key is configured.
 - `AGENT_EXECUTION_MODE` — required explicit `dry-run` or `live`; dry-run simulates proposed contract calls and never submits them.
 - `PORT` / `METRICS_PORT` — Agent API and metrics server ports.
+- `DB_RETRY_MAX_RETRIES`, `DB_RETRY_BASE_DELAY_MS`, `DB_RETRY_MAX_DELAY_MS`, and
+  `DB_TRANSACTION_DEADLINE_MS` — retry budget and total deadline for transient
+  PostgreSQL failures. Retry counters are exposed at
+  `/api/metrics/database-retries`.
 
 The agent rejects legacy `DRY_RUN` and `LIVE_MODE` flags to avoid mixed-mode
 configuration. Live rebalance submission is idempotent by decision snapshot;

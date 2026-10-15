@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   createDecisionId,
   executeRebalanceOperation,
+  PostgresRebalanceOperationRepository,
   type OperationReservation,
   type OperationResult,
   type OperationTransport,
@@ -10,6 +11,7 @@ import {
   type RebalanceOperationRepository,
   type RebalanceOperationStatus,
 } from './rebalanceOperations';
+import { getDatabaseRetryMetrics, resetDatabaseRetryMetrics } from './retry';
 
 class MemoryRepository implements RebalanceOperationRepository {
   readonly operations = new Map<string, RebalanceOperation>();
@@ -102,6 +104,48 @@ async function run(
 }
 
 describe('rebalance operation idempotency (#861)', () => {
+  it('retries a transient reservation transaction with the same operation ID', async () => {
+    resetDatabaseRetryMetrics();
+    const insertedIds: unknown[] = [];
+    let connections = 0;
+    const pool = {
+      async connect() {
+        connections += 1;
+        return {
+          async query<T = Record<string, unknown>>(sql: string, values: unknown[] = []): Promise<{ rows: T[] }> {
+            if (sql.startsWith('SELECT operation_id')) return { rows: [] };
+            if (sql.startsWith('INSERT INTO agent_rebalance_operations')) {
+              insertedIds.push(values[0]);
+              if (insertedIds.length === 1) throw Object.assign(new Error('serialization failure'), { code: '40001' });
+              return {
+                rows: [{
+                  operation_id: values[0],
+                  decision_id: values[1],
+                  attempt: values[2],
+                  status: 'prepared',
+                  tx_hash: null,
+                  retry_reason: values[4] ?? null,
+                  last_error: null,
+                } as T],
+              };
+            }
+            return { rows: [] };
+          },
+          release() {},
+        };
+      },
+      async query<T = Record<string, unknown>>(): Promise<{ rows: T[] }> { return { rows: [] }; },
+    };
+    const repository = new PostgresRebalanceOperationRepository(pool);
+
+    const reservation = await repository.reserve({ decisionId: 'stable-decision', snapshot });
+
+    assert.strictEqual(reservation.operation.operation_id, 'stable-decision');
+    assert.deepStrictEqual(insertedIds, ['stable-decision', 'stable-decision']);
+    assert.strictEqual(connections, 2);
+    assert.strictEqual(getDatabaseRetryMetrics().recovered, 1);
+  });
+
   it('derives the same ID for equivalent ordered snapshots', () => {
     assert.strictEqual(
       createDecisionId('hourly', '2026-09-27T10', { b: 2, a: 1 }),

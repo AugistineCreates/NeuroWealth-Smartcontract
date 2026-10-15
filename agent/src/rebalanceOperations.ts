@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { ExecutionMode } from './executionMode';
+import { withDatabaseRetry } from './retry';
 
 export type RebalanceOperationStatus =
   | 'prepared'
@@ -81,6 +82,14 @@ export class PostgresRebalanceOperationRepository implements RebalanceOperationR
     snapshot: unknown;
     retryReason?: string;
   }): Promise<OperationReservation> {
+    return withDatabaseRetry(() => this.reserveTransaction(input), 'rebalance.reserve');
+  }
+
+  private async reserveTransaction(input: {
+    decisionId: string;
+    snapshot: unknown;
+    retryReason?: string;
+  }): Promise<OperationReservation> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -118,7 +127,7 @@ export class PostgresRebalanceOperationRepository implements RebalanceOperationR
       await client.query('COMMIT');
       return { operation: inserted.rows[0], created: true };
     } catch (error) {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => undefined);
       throw error;
     } finally {
       client.release();
@@ -133,7 +142,7 @@ export class PostgresRebalanceOperationRepository implements RebalanceOperationR
   }): Promise<void> {
     if (!process.env.DATABASE_URL) return;
     const operationId = `dry-run:${input.decisionId}`;
-    await this.pool.query(
+    await withDatabaseRetry(() => this.pool.query(
       `INSERT INTO agent_rebalance_operations
          (operation_id, decision_id, attempt, execution_mode, status, input_snapshot, simulation_result, last_error)
        VALUES ($1, $2, 1, 'dry-run', 'dry_run', $3::jsonb, $4::jsonb, $5)
@@ -149,7 +158,7 @@ export class PostgresRebalanceOperationRepository implements RebalanceOperationR
         JSON.stringify(input.simulation),
         input.rejectionReasons.join('; ') || null,
       ],
-    );
+    ).then(() => undefined), 'rebalance.recordDryRun');
   }
 
   async update(
@@ -157,7 +166,7 @@ export class PostgresRebalanceOperationRepository implements RebalanceOperationR
     status: RebalanceOperationStatus,
     fields: { txHash?: string; error?: string | null; simulation?: unknown } = {},
   ): Promise<void> {
-    await this.pool.query(
+    await withDatabaseRetry(() => this.pool.query(
       `UPDATE agent_rebalance_operations SET
          status = $2,
          tx_hash = COALESCE($3, tx_hash),
@@ -172,7 +181,7 @@ export class PostgresRebalanceOperationRepository implements RebalanceOperationR
         fields.error ?? null,
         fields.simulation === undefined ? null : JSON.stringify(fields.simulation),
       ],
-    );
+    ).then(() => undefined), 'rebalance.update');
   }
 }
 

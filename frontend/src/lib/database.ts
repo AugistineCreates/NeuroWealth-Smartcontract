@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { getBrowserTestHarness } from './browserTestHarness';
 
 export interface EarningsSummary {
   today: number;
@@ -23,6 +24,7 @@ export interface TransactionRecord {
 }
 
 export async function getEarningsSummary(userAddress?: string): Promise<EarningsSummary> {
+  if (getBrowserTestHarness()) return { today: 0, week: 0, month: 0 };
   if (!userAddress || !supabaseUrl()) return { today: 0, week: 0, month: 0 };
 
   const { data: user } = await supabase
@@ -67,6 +69,7 @@ export async function getEarningsSummary(userAddress?: string): Promise<Earnings
 }
 
 export async function getPortfolioValueHistory(userAddress?: string): Promise<ChartDataPoint[]> {
+  if (getBrowserTestHarness()) return [];
   if (!userAddress || !supabaseUrl()) return [];
 
   const { data: user } = await supabase
@@ -99,6 +102,7 @@ export async function getPortfolioValueHistory(userAddress?: string): Promise<Ch
 
 export async function getRecentTransactions(userAddress?: string): Promise<TransactionRecord[]> {
   if (!userAddress) return [];
+  if (getBrowserTestHarness()) return [];
   
   if (!supabaseUrl()) {
     return getRecentTransactionsFromRpc(userAddress);

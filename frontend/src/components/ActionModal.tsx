@@ -1,9 +1,11 @@
 'use client';
 
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X, ArrowDownLeft, ArrowUpRight, Loader2, CheckCircle2, ShieldAlert } from 'lucide-react';
 import { ErrorBoundary } from './ErrorBoundary';
 import { signWithFreighter, WalletSigningError, type WalletErrorKind } from '@/lib/freighter';
+import { getBrowserTestHarness } from '@/lib/browserTestHarness';
 import {
   rpc,
   Contract,
@@ -35,7 +37,6 @@ interface ActionSubmission {
 type ActionSubmissions = Record<ActionType, ActionSubmission>;
 
 const TX_ERROR_COPY: Record<TxErrorKind, string> = {
-  user_rejected: 'Transaction signing was cancelled in Freighter.',
   wrong_network: 'Wrong network. Switch Freighter to the required Stellar network, then try again.',
   wallet_disconnected: 'Wallet not connected. Reconnect Freighter and grant this app access, then try again.',
   submission_failed: 'Transaction failed. Please try again.',
@@ -68,6 +69,42 @@ export const ActionModal: React.FC<ActionModalProps> = ({
   const [txSuccess, setTxSuccess] = useState<boolean>(false);
   const [txHash, setTxHash] = useState<string>('');
   const [txError, setTxError] = useState<TxError | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const amountRef = useRef<HTMLInputElement>(null);
+  const [portalRoot, setPortalRoot] = useState<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen || typeof document === 'undefined') return;
+
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const portal = document.createElement('div');
+    portal.dataset.transactionModalPortal = 'true';
+    document.body.appendChild(portal);
+    setPortalRoot(portal);
+
+    const background = Array.from(document.body.children)
+      .filter((element): element is HTMLElement => element instanceof HTMLElement && element !== portal)
+      .map((element) => ({ element, inert: element.inert, ariaHidden: element.getAttribute('aria-hidden') }));
+    background.forEach(({ element }) => {
+      element.inert = true;
+      element.setAttribute('aria-hidden', 'true');
+    });
+
+    return () => {
+      background.forEach(({ element, inert, ariaHidden }) => {
+        element.inert = inert;
+        if (ariaHidden === null) element.removeAttribute('aria-hidden');
+        else element.setAttribute('aria-hidden', ariaHidden);
+      });
+      portal.remove();
+      setPortalRoot(null);
+      previouslyFocused?.focus();
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (isOpen && portalRoot) amountRef.current?.focus();
+  }, [isOpen, portalRoot]);
 
   if (!isOpen) return null;
 
@@ -94,29 +131,32 @@ export const ActionModal: React.FC<ActionModalProps> = ({
     let submissionStarted = false;
 
     try {
-      const server = new rpc.Server(RPC_URL);
-      const account = await server.getAccount(userPublicKey);
-      const contract = new Contract(VAULT_CONTRACT_ID);
       const amountInBaseUnits = BigInt(Math.round(numAmount * 1e7));
-
-      const txBuilder = new TransactionBuilder(account, {
-        fee: BASE_FEE,
-        networkPassphrase: NETWORK_PASSPHRASE,
-      });
-
-      const operation = contract.call(
-        type === 'deposit' ? 'deposit' : 'withdraw',
-        new Address(userPublicKey).toScVal(),
-        nativeToScVal(amountInBaseUnits, { type: 'i128' }),
-      );
-
-      const transaction = txBuilder
-        .addOperation(operation)
-        .setTimeout(300)
-        .build();
-
-      const preparedTx = await server.prepareTransaction(transaction);
-      const xdr = preparedTx.toXDR();
+      const testHarness = getBrowserTestHarness();
+      let server: rpc.Server | null = null;
+      let xdr: string;
+      if (testHarness) {
+        xdr = await testHarness.prepareTransaction({
+          method: actionType,
+          publicKey: userPublicKey,
+          amount: amountInBaseUnits.toString(),
+        });
+      } else {
+        server = new rpc.Server(RPC_URL);
+        const account = await server.getAccount(userPublicKey);
+        const contract = new Contract(VAULT_CONTRACT_ID);
+        const txBuilder = new TransactionBuilder(account, {
+          fee: BASE_FEE,
+          networkPassphrase: NETWORK_PASSPHRASE,
+        });
+        const operation = contract.call(
+          actionType,
+          new Address(userPublicKey).toScVal(),
+          nativeToScVal(amountInBaseUnits, { type: 'i128' }),
+        );
+        const transaction = txBuilder.addOperation(operation).setTimeout(300).build();
+        xdr = (await server.prepareTransaction(transaction)).toXDR();
+      }
 
       setSubmissions((current) => ({
         ...current,
@@ -144,7 +184,9 @@ export const ActionModal: React.FC<ActionModalProps> = ({
         [actionType]: { phase: 'confirming', requestId },
       }));
       submissionStarted = true;
-      const sendResult = await server.sendTransaction(TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE));
+      const sendResult = testHarness
+        ? await testHarness.sendTransaction(signedXdr)
+        : await server!.sendTransaction(TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE));
 
       if (sendResult.status === 'ERROR' || sendResult.status === 'TRY_AGAIN_LATER') {
         setTxError({ kind: 'submission_failed', message: TX_ERROR_COPY.submission_failed });
@@ -157,7 +199,9 @@ export const ActionModal: React.FC<ActionModalProps> = ({
       // step can't relabel a genuine submission as a failure.
       setTxHash(sendResult.hash);
 
-      const confirmation = await server.pollTransaction(sendResult.hash, { attempts: 10 });
+      const confirmation = testHarness
+        ? await testHarness.pollTransaction(sendResult.hash)
+        : await server!.pollTransaction(sendResult.hash, { attempts: 10 });
 
       if (confirmation.status === 'SUCCESS') {
         setTxSuccess(true);
@@ -192,11 +236,39 @@ export const ActionModal: React.FC<ActionModalProps> = ({
     onClose();
   };
 
-  return (
+  const modal = (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
-      <div className="glass-panel w-full max-w-md rounded-2xl p-6 relative border border-slate-700 shadow-2xl animate-in fade-in zoom-in duration-200">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="transaction-modal-title"
+        aria-describedby="transaction-modal-description"
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            handleResetAndClose();
+            return;
+          }
+          if (event.key !== 'Tab' || !dialogRef.current) return;
+          const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+          ));
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (event.shiftKey && (document.activeElement === first || !dialogRef.current.contains(document.activeElement))) {
+            event.preventDefault();
+            last?.focus();
+          } else if (!event.shiftKey && (document.activeElement === last || !dialogRef.current.contains(document.activeElement))) {
+            event.preventDefault();
+            first?.focus();
+          }
+        }}
+        className="glass-panel w-full max-w-md rounded-2xl p-6 relative border border-slate-700 shadow-2xl animate-in fade-in zoom-in duration-200"
+      >
         <button
           onClick={handleResetAndClose}
+          aria-label="Close transaction dialog"
           className="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
         >
           <X size={20} />
@@ -208,10 +280,11 @@ export const ActionModal: React.FC<ActionModalProps> = ({
             <div className="h-16 w-16 bg-emerald-500/20 text-emerald-400 rounded-full flex items-center justify-center mx-auto mb-4 border border-emerald-500/30">
               <CheckCircle2 size={36} />
             </div>
-            <h3 className="text-xl font-bold text-white mb-2">
+            <h3 id="transaction-modal-title" className="text-xl font-bold text-white mb-2">
               {type === 'deposit' ? 'Deposit Successful!' : 'Withdrawal Successful!'}
             </h3>
-            <p className="text-sm text-slate-400 mb-4 font-mono">
+            <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">Transaction confirmed.</p>
+            <p id="transaction-modal-description" className="text-sm text-slate-400 mb-4 font-mono">
               Transaction Hash: {txHash.substring(0, 12)}...{txHash.substring(txHash.length - 8)}
             </p>
             <p className="text-xs text-emerald-400 bg-emerald-500/10 py-2 px-3 rounded-lg border border-emerald-500/20 mb-6">
@@ -237,10 +310,10 @@ export const ActionModal: React.FC<ActionModalProps> = ({
                 </div>
               )}
               <div>
-                <h3 className="text-lg font-bold text-white capitalize">
+                <h3 id="transaction-modal-title" className="text-lg font-bold text-white capitalize">
                   {type} USDC
                 </h3>
-                <p className="text-xs text-slate-400">
+                <p id="transaction-modal-description" className="text-xs text-slate-400">
                   {type === 'deposit' ? 'Mint shares in Soroban vault' : 'Burn shares & withdraw USDC'}
                 </p>
               </div>
@@ -248,11 +321,13 @@ export const ActionModal: React.FC<ActionModalProps> = ({
 
             <div className="mb-4">
               <div className="flex justify-between text-xs text-slate-400 mb-1.5 font-medium">
-                <span>Amount (USDC)</span>
+                <label htmlFor="transaction-amount">Amount (USDC)</label>
                 <span>Available: {balance.toFixed(2)} USDC</span>
               </div>
               <div className="relative">
                 <input
+                  ref={amountRef}
+                  id="transaction-amount"
                   type="number"
                   step="0.01"
                   min="1"
@@ -260,6 +335,8 @@ export const ActionModal: React.FC<ActionModalProps> = ({
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
                   placeholder="0.00"
+                  aria-invalid={Boolean(txError)}
+                  aria-describedby={txError ? 'transaction-amount-error' : undefined}
                   className="w-full bg-slate-900 border border-slate-700 rounded-xl py-3 px-4 text-white font-mono text-lg focus:outline-none focus:border-emerald-500 transition-colors"
                   required
                 />
@@ -295,7 +372,7 @@ export const ActionModal: React.FC<ActionModalProps> = ({
               >
                 <ShieldAlert size={16} className="shrink-0 mt-0.5" />
                 <div>
-                  <p>{txError.message}</p>
+                  <p id="transaction-amount-error">{txError.message}</p>
                   {txHash && (
                     <p className="mt-1 font-mono text-rose-400/80">
                       Transaction Hash: {txHash.substring(0, 12)}...{txHash.substring(txHash.length - 8)}
@@ -313,6 +390,10 @@ export const ActionModal: React.FC<ActionModalProps> = ({
                 </p>
               </div>
             )}
+
+            <p className="sr-only" aria-live="polite" aria-atomic="true">
+              {loading ? `Transaction ${submission.phase}.` : txSuccess ? 'Transaction confirmed.' : ''}
+            </p>
 
             <button
               type="submit"
@@ -339,4 +420,6 @@ export const ActionModal: React.FC<ActionModalProps> = ({
       </div>
     </div>
   );
+
+  return portalRoot ? createPortal(modal, portalRoot) : null;
 };

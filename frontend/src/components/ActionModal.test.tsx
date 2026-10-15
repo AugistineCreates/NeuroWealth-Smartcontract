@@ -92,6 +92,35 @@ describe('ActionModal', () => {
     vi.clearAllMocks();
   });
 
+  it('exposes a labelled dialog, traps focus, closes on Escape, and restores focus', async () => {
+    const trigger = document.createElement('button');
+    document.body.appendChild(trigger);
+    trigger.focus();
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <ActionModal isOpen onClose={onClose} type="deposit" userPublicKey="GUSER" balance={250} exchangeRate={1.25} />,
+    );
+
+    const dialog = screen.getByRole('dialog', { name: 'deposit USDC' });
+    expect(dialog).toHaveAttribute('aria-describedby', 'transaction-modal-description');
+    expect(document.activeElement).toBe(screen.getByLabelText('Amount (USDC)'));
+    expect(document.body.firstElementChild).toHaveAttribute('aria-hidden', 'true');
+
+    const closeButton = screen.getByRole('button', { name: 'Close transaction dialog' });
+    closeButton.focus();
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /max/i }));
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
+
+    rerender(
+      <ActionModal isOpen={false} onClose={onClose} type="deposit" userPublicKey="GUSER" balance={250} exchangeRate={1.25} />,
+    );
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(document.body.firstElementChild).not.toHaveAttribute('aria-hidden', 'true');
+    trigger.remove();
+  });
+
   it('submits a deposit and renders the success state', async () => {
     renderModal('deposit');
 
