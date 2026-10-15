@@ -63,7 +63,7 @@ Runtime: Node.js or Python
 Stellar SDK: @stellar/stellar-sdk
 AI: Claude API / OpenAI for natural language intent parsing
 Database: PostgreSQL / Supabase for user position tracking
-Queue: Bull / Redis for reliable transaction processing
+Scheduling: In-memory priority queue with gas awareness (RebalanceScheduler)
 
 ### Frontend
 
