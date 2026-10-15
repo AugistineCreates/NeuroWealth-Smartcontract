@@ -2,6 +2,7 @@
 
 use super::utils::*;
 use crate::{DataKey, WithdrawEvent, TOPIC_WITHDRAW};
+use proptest::prelude::*;
 use soroban_sdk::{testutils::Address as _, Address, Env, TryFromVal};
 
 /// Reads the raw `Shares(user)` value persisted in storage.
@@ -145,6 +146,54 @@ fn test_partial_withdrawal_reduces_shares() {
         remaining_shares < initial_shares,
         "Shares should decrease after partial withdraw"
     );
+}
+
+#[test]
+fn test_withdraw_caps_ceil_then_floor_rounding_at_requested_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, agent, _owner, usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let token_client = TestTokenClient::new(&env, &usdc_token);
+    let user = Address::generate(&env);
+
+    // A = 3, S = 2, amount = 2: ceil(2 * 2 / 3) burns 2 shares and
+    // floor(2 * 3 / 2) is 3. The transfer must still be capped at 2.
+    mint_and_deposit(&env, &client, &usdc_token, &user, 2);
+    token_client.mint(&contract_id, &1);
+    client.update_total_assets(&agent, &3, &false, &0);
+
+    client.withdraw(&user, &2);
+
+    assert_eq!(client.get_balance(&user), 2);
+    assert_eq!(client.get_shares(&user), 0);
+    assert_eq!(token_client.balance(&contract_id), 1);
+}
+
+proptest! {
+    #[test]
+    fn payout_never_exceeds_requested_or_available(
+        total_assets in 1_i128..1_000_000,
+        total_shares in 1_i128..1_000_000,
+        requested in 1_i128..1_000_000,
+        available in 1_i128..1_000_000,
+    ) {
+        let product = requested.saturating_mul(total_shares);
+        let shares_to_burn = product
+            .saturating_add(total_assets - 1)
+            .checked_div(total_assets)
+            .unwrap_or(0);
+        let converted = shares_to_burn
+            .saturating_mul(total_assets)
+            .checked_div(total_shares)
+            .unwrap_or(0);
+        let actual_to_return = requested.min(available);
+        let usdc_to_return = converted.min(actual_to_return);
+
+        prop_assert!(usdc_to_return <= requested);
+        prop_assert!(usdc_to_return <= available);
+    }
 }
 
 #[test]

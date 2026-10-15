@@ -10,6 +10,12 @@ This changelog is tied to the vault contract `Version` storage value. Each relea
 
 ## [Unreleased]
 <!-- Add entries below. Format: `- Short description (Issue #N).` -->
+- **Per-leg rebalance slippage:** `rebalance`, `rebalance_multi`, and `harvest`
+  now interpret `min_out` as a basis-point tolerance and derive an independent
+  minimum for every supply/withdraw leg, including each multi-protocol venue.
+  Legacy absolute minimums above 10,000 remain accepted during migration.
+  Incomplete exits now count toward the circuit breaker; they intentionally do
+  not update `LastRebalanceLedger` because no rebalance completed.
 - **Approval-expiry readiness event (Issue #847):** `set_approval_ttl` and the
   legacy `set_blend_approval_ttl` now emit `ProtocolApprovalScheduledEvent`
   (`ttl_sch`) alongside `ApprovalTtlUpdatedEvent`, carrying the protocol, the

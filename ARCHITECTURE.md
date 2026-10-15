@@ -723,6 +723,10 @@ has not yet recovered:
 
 A shortfall on an exit leg is not fatal: the un-recovered amount simply remains
 in place and is corrected on the next rebalance, keeping the vault solvent.
+`min_out` is a basis-point slippage tolerance converted independently for each
+venue leg from that leg's expected amount. Incomplete exits emit
+`RebalanceFailedEvent`, increment `ConsecutiveFailures`, and can auto-pause the
+vault. They do not update `LastRebalanceLedger`, because no rebalance completed.
 
 ### Proportional withdrawal
 
