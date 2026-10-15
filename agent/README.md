@@ -151,3 +151,22 @@ cannot be read, the listener does not start, so it never skips ahead silently.
 If the agent was down for longer than the RPC retention window, the listener
 logs an error saying that events were missed and resumes from the latest
 ledger. Those events must then be backfilled manually.
+
+The cursor also records the id of the last handled event. Event ids are
+ordered, so an event at or before it is skipped if the RPC returns it again,
+and a replayed page never re-runs a handled event. If a cursor write fails,
+the poll stops before handling the next event. It backs off through the
+circuit breaker and retries the write on the next tick, so the durable cursor
+is never more than one event behind.
+
+## Graceful shutdown (#750)
+
+On `SIGTERM`/`SIGINT` the agent stops the decision loop and rollup scheduler,
+closes the HTTP server, and then stops the event listener. No new poll starts.
+An in-flight poll finishes the event it is handling and stops before the next
+one, and the latest cursor position is flushed while the DB pool is still
+open. The pool closes last. The whole sequence is bounded by a 10 s timeout,
+so give the container a longer stop grace period (for example
+`stop_grace_period: 20s`). A restart after a clean shutdown resumes with the
+next unhandled event, with no replay and no gap. Only a hard kill between
+handling an event and persisting the cursor can replay that one event.

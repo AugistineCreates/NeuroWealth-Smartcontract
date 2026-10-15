@@ -135,6 +135,7 @@ export async function gracefulShutdown(
     decisionInterval = null;
     logger.info('Decision loop stopped');
   }
+  rollupScheduler.stop();
 
   // 2. Stop accepting incoming HTTP connections and drain in-flight requests
   if (serverInstance) {
@@ -150,9 +151,10 @@ export async function gracefulShutdown(
     });
   }
 
-  // 3. Gracefully stop event listener and await completion of in-flight polls
+  // 3. Gracefully stop event listener: let the in-flight event finish and
+  //    flush the ledger cursor while the DB pool is still open.
   try {
-    await stopEventListener();
+    await stopEventListener(Math.max(1000, Math.floor(options.timeoutMs / 2)));
   } catch (err) {
     logger.error({ error: err instanceof Error ? err.message : String(err) }, 'Error stopping event listener');
   }
