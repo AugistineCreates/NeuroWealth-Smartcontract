@@ -533,21 +533,32 @@ The deployment script will:
 
 ### Testnet
 
+There is no dedicated testnet script. `scripts/deploy-devnet.sh` is the only
+non-mainnet deployment script; it reads `SOROBAN_RPC_URL` and
+`SOROBAN_NETWORK_PASSPHRASE` from the environment, so point those at the
+testnet endpoints to deploy there:
+
 ```bash
-# Deploy everything to Stellar testnet
-./scripts/deploy.sh --network testnet
+# Run `./scripts/deploy-devnet.sh --help` for all options
+export SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
+export SOROBAN_NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
+./scripts/deploy-devnet.sh
 ```
 
 ### Mainnet
 ⚠️ **CRITICAL:** Before deploying to Stellar mainnet, you must complete and sign off on all items in the [Mainnet Deployment Checklist](docs/MAINNET_CHECKLIST.md) (including separate keys setup, TVL limits, Blend pool verification, pause drills, and multisig governance plans).
 
 ```bash
-# Ensure all tests pass first
-cargo test
-npm test
+# Ensure all tests pass first (there is no root package.json; run each package's tests)
+(cd neurowealth-vault && cargo test)
+(cd agent && npm test)
+(cd whatsapp && npm test)
+
+# Rehearse the deployment without broadcasting transactions
+./scripts/deploy-mainnet.sh --dry-run
 
 # Deploy to mainnet
-./scripts/deploy.sh --network mainnet
+./scripts/deploy-mainnet.sh
 ```
 ## Infrastructure (Recommended)
 
@@ -593,7 +604,7 @@ Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md)
    git push origin feature/your-feature-name
    ```
 2. **Open a Pull Request** against the `main` branch.
-3. Please make sure to run `cargo test` and `npm test` before submitting.
+3. Please make sure to run `cargo test` (in `neurowealth-vault/`) and `npm test` (in each package you changed, e.g. `agent/` or `whatsapp/`) before submitting.
 
 
 ### On-chain rate limits

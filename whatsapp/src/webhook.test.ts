@@ -4,6 +4,9 @@ import { handleWhatsAppWebhook } from './webhook';
 import { hashPhoneNumber } from './cryptoUtils';
 import { getWallet } from './walletService';
 import { getSession, updateState, UserState } from './stateManager';
+import { InMemoryStateStore, setStateStore } from './stateStore';
+
+setStateStore(new InMemoryStateStore());
 
 // Webhook state machine (#691). Each test uses its own phone number, because the
 // session, wallet and OTP stores are module-level maps with no reset hook - and
@@ -63,7 +66,7 @@ describe('webhook verification flow (#691)', () => {
 
     assert.strictEqual(captured.type, 'text/xml');
     assert.match(captured.body, /OTP code is: [0-9]{6}/);
-    assert.strictEqual(getSession(hashPhoneNumber(from)).state, UserState.AWAITING_OTP);
+    assert.strictEqual((await getSession(hashPhoneNumber(from))).state, UserState.AWAITING_OTP);
   });
 
   it('asks an unverified user to greet first when they send something else', async () => {
@@ -77,7 +80,7 @@ describe('webhook verification flow (#691)', () => {
     const captured = await send(from, issued);
 
     assert.match(captured.body, /Public Key: G/);
-    assert.strictEqual(getSession(hashPhoneNumber(from)).state, UserState.VERIFIED);
+    assert.strictEqual((await getSession(hashPhoneNumber(from))).state, UserState.VERIFIED);
     assert.ok(getWallet(hashPhoneNumber(from)), 'a wallet should exist after verification');
   });
 
@@ -88,7 +91,7 @@ describe('webhook verification flow (#691)', () => {
     const captured = await send(from, wrong);
 
     assert.match(captured.body, /attempts remaining/);
-    assert.strictEqual(getSession(hashPhoneNumber(from)).state, UserState.AWAITING_OTP);
+    assert.strictEqual((await getSession(hashPhoneNumber(from))).state, UserState.AWAITING_OTP);
   });
 
   it('prompts again when the awaiting-OTP user sends something that is not a code', async () => {
@@ -141,11 +144,11 @@ describe('webhook verified flows (#691)', () => {
   it('resets a verified session whose wallet is missing', async () => {
     const from = freshFrom();
     const phoneHash = hashPhoneNumber(from);
-    updateState(phoneHash, UserState.VERIFIED);
+    (await updateState(phoneHash, UserState.VERIFIED));
 
     const captured = await send(from, 'balance');
     assert.match(captured.body, /Session expired/);
-    assert.strictEqual(getSession(phoneHash).state, UserState.UNVERIFIED);
+    assert.strictEqual((await getSession(phoneHash)).state, UserState.UNVERIFIED);
   });
 });
 

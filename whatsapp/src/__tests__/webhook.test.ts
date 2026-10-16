@@ -94,6 +94,9 @@ require.cache[dbPath] = {
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { handleWhatsAppWebhook } from '../webhook';
+import { InMemoryStateStore, setStateStore } from '../stateStore';
+
+setStateStore(new InMemoryStateStore());
 import { INPUT_LIMITS, SAFE_OVERSIZE_REPLY, SAFE_STRATEGY_REPLY, SAFE_MALFORMED_REPLY } from '../inputBounds';
 
 // ── Minimal req/res helpers ──────────────────────────────────────────────────
