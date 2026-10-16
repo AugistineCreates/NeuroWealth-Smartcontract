@@ -32,10 +32,13 @@ describe('stellar lib fetchVaultState (#753)', () => {
     const state = await fetchVaultState();
 
     expect(state).toEqual({
-      balance: 0,
-      strategy: 'Balanced',
-      exchangeRate: 1.0,
-      apy: 0,
+      ok: true,
+      state: {
+        balance: 0,
+        strategy: 'Balanced',
+        exchangeRate: 1.0,
+        apy: 0,
+      },
     });
     expect(simulateSpy).not.toHaveBeenCalled();
   });
@@ -69,10 +72,12 @@ describe('stellar lib fetchVaultState (#753)', () => {
 
     const state = await fetchVaultState(dummyUser);
 
-    expect(state.balance).toBe(1500);
-    expect(state.strategy).toBe('Growth');
-    expect(state.exchangeRate).toBe(1.1);
-    expect(state.apy).toBeGreaterThan(0);
+    expect(state.ok).toBe(true);
+    if (!state.ok) throw new Error(state.error);
+    expect(state.state.balance).toBe(1500);
+    expect(state.state.strategy).toBe('Growth');
+    expect(state.state.exchangeRate).toBe(1.1);
+    expect(state.state.apy).toBeGreaterThan(0);
   });
 
   it('maps conservative and balanced strategies correctly', async () => {
@@ -103,24 +108,21 @@ describe('stellar lib fetchVaultState (#753)', () => {
     });
 
     const state = await fetchVaultState(dummyUser);
-    expect(state.balance).toBe(50);
-    expect(state.strategy).toBe('Conservative');
-    expect(state.exchangeRate).toBe(1.0);
+    expect(state.ok).toBe(true);
+    if (!state.ok) throw new Error(state.error);
+    expect(state.state.balance).toBe(50);
+    expect(state.state.strategy).toBe('Conservative');
+    expect(state.state.exchangeRate).toBe(1.0);
   });
 
-  it('falls back to safe defaults when RPC throws or simulation fails', async () => {
+  it('returns an error when an RPC call fails instead of showing zero balance', async () => {
     const { fetchVaultState, server } = await importStellar();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(server, 'simulateTransaction').mockRejectedValue(new Error('RPC connection failed'));
 
     const state = await fetchVaultState(dummyUser);
 
-    expect(state).toEqual({
-      balance: 0,
-      strategy: 'Balanced',
-      exchangeRate: 1.0,
-      apy: 0,
-    });
+    expect(state).toEqual({ ok: false, error: 'RPC connection failed' });
     warnSpy.mockRestore();
   });
 });
