@@ -110,10 +110,10 @@ export interface RebalanceEvent {
 
 /** Emitted by the contract. */
 export interface HarvestEvent {
-  /** The protocol harvested from (e.g., "blend", "dex") */
+  /** The protocol harvested from ("blend", "dex", or "multi") */
   protocol: string;
-  /** Amount withdrawn and re-deposited */
-  amount_harvested: bigint;
+  /** Amount actually resupplied; not a yield amount */
+  amount_cycled: bigint;
 }
 
 /** Emitted by the contract. */

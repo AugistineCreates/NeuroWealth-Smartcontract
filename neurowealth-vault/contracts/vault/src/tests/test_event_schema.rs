@@ -10,12 +10,14 @@ use super::utils::*;
 use crate::{
     AgentUpdatedEvent, AssetsUpdatedEvent, BlendPoolConfiguredEvent, BlendSupplyEvent,
     BlendWithdrawEvent, DepositEvent, DepositLimitsUpdatedEvent, EmergencyPausedEvent,
+    HarvestEvent,
     OwnershipTransferInitiatedEvent, OwnershipTransferredEvent, ProtocolChangedEvent,
     RebalanceEvent, TvlCapUpdatedEvent, UserDepositCapUpdatedEvent, VaultInitializedEvent,
     VaultPausedEvent, VaultUnpausedEvent, WithdrawEvent, TOPIC_AGENT_UPDATED, TOPIC_ASSETS_UPDATED,
     TOPIC_BLEND_POOL_CONFIGURED, TOPIC_BLEND_SUPPLY, TOPIC_BLEND_WITHDRAW, TOPIC_DEPOSIT,
-    TOPIC_DEPOSIT_LIMITS_UPDATED, TOPIC_EMERGENCY_PAUSED, TOPIC_INIT, TOPIC_OWNERSHIP_INITIATED,
-    TOPIC_OWNERSHIP_TRANSFERRED, TOPIC_PAUSED, TOPIC_PROTOCOL_CHANGED, TOPIC_REBALANCE,
+    TOPIC_DEPOSIT_LIMITS_UPDATED, TOPIC_EMERGENCY_PAUSED, TOPIC_HARVEST, TOPIC_INIT,
+    TOPIC_OWNERSHIP_INITIATED, TOPIC_OWNERSHIP_TRANSFERRED, TOPIC_PAUSED,
+    TOPIC_PROTOCOL_CHANGED, TOPIC_REBALANCE,
     TOPIC_TVL_CAP_UPDATED, TOPIC_UNPAUSED, TOPIC_USER_CAP_UPDATED, TOPIC_WITHDRAW,
 };
 use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, TryFromVal};
@@ -214,6 +216,33 @@ fn test_event_schema_rebalance_events() {
     assert_eq!(rebalance_event.amount_moved, 0);
     assert_eq!(rebalance_event.amount_supplied, 0);
     assert_eq!(rebalance_event.amount_withdrawn, 0);
+}
+
+/// HarvestEvent reports the actual amount cycled back into a protocol, not
+/// the full withdrawn position as realized yield.
+#[test]
+fn test_event_schema_harvest_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    client.set_blend_pool(&owner, &blend_pool);
+    let user = Address::generate(&env);
+    let amount = 5_000_000_i128;
+    mint_and_deposit(&env, &client, &usdc_token, &user, amount);
+    client.rebalance(&symbol_short!("blend"), &850_i128, &0_i128);
+
+    client.harvest(&0_i128);
+
+    let events = find_events_by_topic(env.events().all(), &env, TOPIC_HARVEST);
+    assert_eq!(events.len(), 1, "Exactly one harvest event should be emitted");
+    let (_, _, data) = &events[0];
+    let harvest =
+        HarvestEvent::try_from_val(&env, data).expect("Should be a valid HarvestEvent");
+    assert_eq!(harvest.protocol, symbol_short!("blend"));
+    assert_eq!(harvest.amount_cycled, amount);
 }
 
 /// ProtocolChangedEvent is emitted when CurrentProtocol updates (#149).
