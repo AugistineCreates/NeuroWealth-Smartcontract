@@ -370,13 +370,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run cargo-deny
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: EmbarkStudios/cargo-deny-action@v2.0.0
         with:
           command: check
           # The vault workspace manifest drives the dependency graph.
           manifest-path: ./neurowealth-vault/Cargo.toml
-          # Policy lives in deny.toml at the repo root.
-          command-arguments: "--config deny.toml"
+          # Policy lives in deny.toml at the repo root (auto-discovered by cargo-deny).
           # Respect the [graph] settings in deny.toml instead of forcing
           # --all-features (the action's default).
           arguments: ""
@@ -518,6 +517,10 @@ jobs:
     permissions:
       contents: read
     needs: [changes]
+    # Note: All 9 fuzz targets run in CI. Runtime considerations:
+    # - PR: 9 targets × 120s = ~18 minutes total (parallelized)
+    # - Scheduled: 9 targets × 300s = ~45 minutes total (parallelized)
+    # The timeout-minutes: 10 applies per target, not per matrix.
     if: |
       github.event_name == 'schedule' ||
       (github.event_name == 'pull_request' && needs.changes.outputs.vault_src == 'true')
@@ -530,6 +533,10 @@ jobs:
           - rounding_boundaries
           - share_accounting_invariants
           - agent_update_timelock
+          - admin_timelock_interleaved
+          - harvest_sequence
+          - upgrade_timelock
+          - user_strategy
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
