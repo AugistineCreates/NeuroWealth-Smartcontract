@@ -617,3 +617,22 @@ User migration can complement traditional storage migrations:
 - Provide instructions for using new vault
 - Share performance metrics
 - Archive old vault information
+
+---
+
+## 13. Upgrade Timelock & Governance Architecture (Issues #316, #607, #922)
+
+### 13.1 Two-Step Upgrade Timelock Flow (#316)
+
+Replacing contract code follows a mandatory two-step timelock to protect against unauthorized or accidental WASM upgrades:
+1. `schedule_upgrade(owner, new_wasm_hash)`: The owner schedules the proposal, storing `PendingUpgradeHash` and establishing `UpgradeTimelockExpiry` (17,280 ledgers ≈ 24 hours). An `UpgradeScheduledEvent` is emitted.
+2. **Review Window**: During this 24-hour delay, monitoring and off-chain watchers verify the proposed WASM hash against reproducible build artifacts. If unauthorized or erroneous, `cancel_upgrade(owner)` can be called to void the proposal.
+3. `execute_upgrade(owner)`: Once the expiry ledger is reached and provided the vault is not paused, the owner invokes `execute_upgrade` to apply the new WASM and increment the contract version.
+
+### 13.2 Second Signature & Multi-Sig Governance Decision (#607, #922)
+
+In [`docs/GUARDIAN_KEY_DESIGN.md`](GUARDIAN_KEY_DESIGN.md), an interim smart-contract-level guardian key pattern (`DataKey::Guardian` co-signing `execute_upgrade`) was evaluated alongside native Stellar account multi-sig.
+
+**Recorded Decision:**
+- **Smart-contract-level guardian key is formally deferred**: Implementing an interim contract-level guardian introduces duplicate governance flows, storage overhead, and extra error variants while only protecting `execute_upgrade`.
+- **Native Stellar Multi-Sig adopted**: Mainnet owner governance relies on Stellar native protocol-level account multi-sig (e.g. 2-of-3 threshold). This guarantees that *every* owner action—including `schedule_upgrade`, `execute_upgrade`, and `pause`—requires M-of-N independent cryptographic signatures at the transaction envelope level.
