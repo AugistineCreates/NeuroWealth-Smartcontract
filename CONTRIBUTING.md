@@ -87,6 +87,25 @@ To contribute to the smart contracts, you'll need the following installed:
   Using a different version than the pin is the most common cause of CI failures locally.
 - **Node.js & npm**: For agent and frontend development (LTS version recommended).
 
+### Pre-Commit Secret Scanning Hook
+
+To catch committed secrets (Stellar secret seeds, `.env` contents, API keys) locally before pushing, wire up our pre-commit hook (`scripts/pre-commit-gitleaks.sh`):
+
+1. **Install gitleaks** (`brew install gitleaks` or download from [Gitleaks Releases](https://github.com/gitleaks/gitleaks/releases)).
+2. **Wire the git hook** using either method:
+   - Configure git hooks directory:
+     ```bash
+     git config core.hooksPath .githooks
+     ```
+   - Or symlink directly into `.git/hooks`:
+     ```bash
+     ln -sf ../../scripts/pre-commit-gitleaks.sh .git/hooks/pre-commit
+     ```
+   - Or if you use `pre-commit`:
+     ```bash
+     pre-commit install
+     ```
+
 ### Building the Contract
 
 Navigate to the contract directory and use the Stellar CLI to build:
@@ -324,9 +343,11 @@ License exceptions follow the same PR-based process but additionally require leg
 ## Coding Standards
 
 - **Error Messages**: All error messages must follow the [Error Message Style Guide](ERROR_STYLE_GUIDE.md).
+- **Linting & Code Style**: Follow the [Shared Linting Baseline](docs/LINTING.md) across all Node.js and TypeScript packages (`frontend`, `agent`, `whatsapp`, `packages/vault-ui`).
 - **Architecture**: Ensure changes align with the project [Architecture Documentation](ARCHITECTURE.md).
 - **Events**: Every state change should emit a corresponding event as defined in [EVENTS.md](EVENTS.md).
 - **Safety**: Always use `checked_*` arithmetic operations for financial calculations.
+
 
 ## Submitting a Pull Request
 

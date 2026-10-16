@@ -1,4 +1,6 @@
 import { supabase } from './supabase';
+import { server } from './stellar';
+import { rpc, scValToNative } from '@stellar/stellar-sdk';
 
 export interface EarningsSummary {
   today: number;
@@ -160,9 +162,6 @@ function supabaseUrl(): boolean {
   return !!process.env.NEXT_PUBLIC_SUPABASE_URL;
 }
 
-import { server } from './stellar';
-import { rpc, xdr, scValToNative } from '@stellar/stellar-sdk';
-
 /**
  * Fallback to fetch transactions directly from Soroban RPC events
  * Note: 'mock mode' as requested by the issue, although this fetches real on-chain events.
@@ -199,7 +198,7 @@ async function getRecentTransactionsFromRpc(userAddress: string): Promise<Transa
         } else {
           continue;
         }
-      } catch (e) {
+      } catch (_e) {
         continue;
       }
       
@@ -235,10 +234,11 @@ async function getRecentTransactionsFromRpc(userAddress: string): Promise<Transa
           }) + ' (RPC Fallback)',
           status: 'confirmed'
         });
-      } catch (e) {
+      } catch (_e) {
         // ignore parsing errors
       }
     }
+
     
     return records.reverse().slice(0, 10);
   } catch (error) {

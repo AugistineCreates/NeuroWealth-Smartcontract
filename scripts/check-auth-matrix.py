@@ -3,6 +3,15 @@ import sys
 import re
 import os
 
+def is_readonly(func_name):
+    """Returns True if the function is a read-only getter or view query."""
+    return (
+        func_name.startswith("get_")
+        or func_name.startswith("preview_")
+        or func_name.startswith("convert_")
+        or func_name == "is_paused"
+    )
+
 def parse_security_md(filepath):
     with open(filepath, "r", encoding="utf-8") as f:
         content = f.read()
@@ -29,6 +38,11 @@ def parse_security_md(filepath):
         if len(cells) < 5:
             continue
         func_name = cells[0].strip()
+        
+        # Skip read-only getters; they are documented in Read-Only / View Functions
+        if is_readonly(func_name):
+            continue
+
         owner = cells[1].strip() in ("yes", "✅")
         agent = cells[2].strip() in ("yes", "✅")
         user = cells[3].strip() in ("yes", "✅")
@@ -62,6 +76,9 @@ def parse_lib_rs(filepath):
         if not match:
             continue
         func_name = match.group(1)
+        
+        if func_name == "initialize" or is_readonly(func_name):
+            continue
         
         brace_count = 0
         in_body = False
@@ -110,12 +127,6 @@ def parse_lib_rs(filepath):
             elif "emergency_harvest" in func_name and "owner" in body.lower():
                 access = "owner"
             
-        if func_name == "initialize":
-            continue
-            
-        if func_name.startswith("get_") or func_name.startswith("preview_") or func_name.startswith("convert_") or func_name == "is_paused":
-            continue
-            
         functions[func_name] = access
 
     return functions
@@ -131,6 +142,8 @@ def main():
     errors = False
     
     for func, sec_access in sec_funcs.items():
+        if is_readonly(func):
+            continue
         if func not in lib_funcs:
             print(f"FAIL: Function {func} is in SECURITY.md but not found as a state-changing function in lib.rs.")
             errors = True
@@ -148,3 +161,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

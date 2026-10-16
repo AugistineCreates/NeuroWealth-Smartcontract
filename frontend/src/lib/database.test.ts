@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { getEarningsSummary, getPortfolioValueHistory, getRecentTransactions } from './database';
-import { supabase } from './supabase';
 import { server } from './stellar';
+
 
 vi.mock('./supabase', () => ({
   supabase: {

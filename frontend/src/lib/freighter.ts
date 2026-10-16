@@ -36,10 +36,11 @@ export async function connectFreighterWallet(): Promise<string | null> {
 
     const key = await getFreighterPublicKey();
     return key || null;
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('Failed to connect Freighter wallet:', err);
     return null;
   }
+
 }
 
 /**
