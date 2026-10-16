@@ -6545,14 +6545,22 @@ impl NeuroWealthVault {
         Self::require(
             &env,
             new_standby != primary,
-            VaultError::InvalidStrategy,
+            VaultError::NotInitialized,
         );
 
         let old_standby: Option<Address> = env.storage().instance().get(&DataKey::StandbyAgent);
 
+        let effective_ledger = env
+            .ledger()
+            .sequence()
+            .saturating_add(AGENT_TIMELOCK_LEDGERS);
+
         env.storage()
             .instance()
             .set(&DataKey::StandbyAgent, &new_standby);
+        env.storage()
+            .instance()
+            .set(&DataKey::StandbyAgentTimelockExpiry, &effective_ledger);
 
         let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
         env.events().publish(
@@ -6597,7 +6605,20 @@ impl NeuroWealthVault {
         let old_primary: Address = env.storage().instance().get(&DataKey::Agent).unwrap();
         let standby: Option<Address> = env.storage().instance().get(&DataKey::StandbyAgent);
 
-        let new_primary = standby.expect("switch_to_standby_agent: no standby agent configured");
+        let new_primary = standby.unwrap_or_else(|| panic_with_error!(&env, VaultError::NotInitialized));
+
+        // Check that the standby has been set for at least AGENT_TIMELOCK_LEDGERS
+        let expiry: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::StandbyAgentTimelockExpiry)
+            .unwrap_or(0);
+
+        Self::require(
+            &env,
+            env.ledger().sequence() >= expiry,
+            VaultError::TimelockNotExpired,
+        );
 
         // Promote standby to primary.
         env.storage().instance().set(&DataKey::Agent, &new_primary);
@@ -6607,6 +6628,15 @@ impl NeuroWealthVault {
         env.storage()
             .instance()
             .set(&DataKey::StandbyAgent, &old_primary);
+
+        // Clear the timelock on the new standby (old primary)
+        let new_expiry = env
+            .ledger()
+            .sequence()
+            .saturating_add(AGENT_TIMELOCK_LEDGERS);
+        env.storage()
+            .instance()
+            .set(&DataKey::StandbyAgentTimelockExpiry, &new_expiry);
 
         let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
         env.events().publish(

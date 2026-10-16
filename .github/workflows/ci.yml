@@ -10,7 +10,7 @@ on:
     - cron: "0 3 * * 0"
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   # Maximum allowed size in bytes for the optimised contract WASM.
@@ -29,7 +29,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    steps:
       - name: Checkout (full history)
         uses: actions/checkout@v4
         with:
@@ -63,6 +62,8 @@ jobs:
   ci-matrix:
     name: CI Matrix
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -347,6 +348,8 @@ jobs:
     name: Kani Share-Accounting Proofs
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -358,12 +361,10 @@ jobs:
   cargo-deny:
     name: Dependency Audit (cargo-deny)
     runs-on: ubuntu-latest
-    # The workflow-level weekly cron (Sunday 03:00 UTC) re-runs this job
-    # against a fresh RustSec advisory database, so advisories published
-    # against pinned dependencies surface without waiting for a PR.
     permissions:
       contents: read
       issues: write
+    # The workflow-level weekly cron (Sunday 03:00 UTC) re-runs this job
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -430,15 +431,9 @@ jobs:
     name: Reproducible Build Check
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Two clean uncached builds are expensive, so this runs where an
-    # attestation matters — weekly, on demand, and on pushes to main —
-    # rather than on every PR.
-    if: |
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')
     permissions:
       contents: read
+    # Two clean uncached builds are expensive, so this runs where an
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -459,6 +454,8 @@ jobs:
   readme-check:
     name: README Validation
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -469,6 +466,8 @@ jobs:
   security-audit:
     name: Security Documentation Audit
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -491,6 +490,8 @@ jobs:
   changes:
     name: Detect changes
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       contract: ${{ steps.filter.outputs.contract }}
       vault_src: ${{ steps.filter.outputs.vault_src }}
@@ -514,6 +515,8 @@ jobs:
     name: Fuzz ${{ matrix.target }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     needs: [changes]
     if: |
       github.event_name == 'schedule' ||
@@ -559,6 +562,8 @@ jobs:
     name: Fuzz withdrawal_queue_invariants
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
     needs: [changes]
     if: |
       github.event_name == 'schedule' ||
@@ -597,6 +602,8 @@ jobs:
     name: E2E Devnet Validation
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
     needs: [ci-matrix, changes]
     # Trigger e2e-devnet on manual dispatch, weekly schedule, or PRs with 'run-e2e' label or contract modifications
     if: |
@@ -735,6 +742,8 @@ jobs:
   arithmetic-guard:
     name: Arithmetic overflow guard
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
