@@ -9500,7 +9500,22 @@ impl NeuroWealthVault {
                 continue;
             }
 
-            // Fulfil the request and prune its terminal record.
+            let usdc_token: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
+            let vault_address = env.current_contract_address();
+            let available = token::Client::new(&env, &usdc_token).balance(&vault_address);
+            if available < request.amount {
+                new_order.push_back(id);
+                continue;
+            }
+
+            let (paid, _) = Self::burn_and_pay(
+                &env,
+                &request.user,
+                request.amount,
+                BurnAndPayMode::Requested,
+            );
+
+            // Fulfil only after payment and share accounting have succeeded.
             env.storage()
                 .instance()
                 .remove(&DataKey::WithdrawalRequest(id));
@@ -9512,7 +9527,7 @@ impl NeuroWealthVault {
                 WithdrawalFulfilledEvent {
                     request_id: id,
                     user: request.user,
-                    amount: request.amount,
+                    amount: paid,
                 },
             );
         }
