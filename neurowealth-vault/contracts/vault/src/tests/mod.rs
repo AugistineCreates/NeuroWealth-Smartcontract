@@ -97,4 +97,5 @@ mod test_performance_fee;
 mod test_user_apy;
 mod test_insurance_fund;
 mod test_withdrawal_queue;
+mod test_pause_queue_breaker_matrix_proptest;
 
