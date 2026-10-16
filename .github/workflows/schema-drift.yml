@@ -4,15 +4,20 @@ on:
   pull_request:
     branches: ["main", "develop"]
     paths:
-      - 'supabase/migrations/**'
-      - 'db/schema.sql'
-      - 'db/types.ts'
-      - 'scripts/check-schema-drift.py'
+      - "supabase/migrations/**"
+      - "db/schema.sql"
+      - "db/types.ts"
+      - "scripts/check-schema-drift.py"
+
+permissions:
+  contents: read
 
 jobs:
   schema-drift:
     name: Schema drift check
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -21,7 +26,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Check db/schema.sql and db/types.ts against supabase/migrations
         run: |
