@@ -116,8 +116,18 @@ async function processWhatsAppMessage(phoneHash: string, messageBody: string, re
       return;
     }
 
-    // Flow 2: AWAITING_OTP -> Verify OTP input code
+    // Flow 2: AWAITING_OTP -> Verify OTP input code or allow "hi" to request new code
     if (session.state === UserState.AWAITING_OTP) {
+      // Allow "hi" to request a new OTP code (helps users recover from lockout/expiry)
+      if (intent.type === 'GREETING' || intent.type === 'UNKNOWN') {
+        const otpCode = generateOTP(phoneHash);
+        reply(twiml,
+          `🔑 New OTP code generated:\n\n${otpCode}\n\n(Code expires in 5 minutes)`
+        );
+        res.type('text/xml').send(twiml.toString());
+        return;
+      }
+
       if (intent.type === 'OTP_CODE' && intent.otpCode) {
         const verification = verifyOTP(phoneHash, intent.otpCode);
 
@@ -125,7 +135,7 @@ async function processWhatsAppMessage(phoneHash: string, messageBody: string, re
           updateState(phoneHash, UserState.VERIFIED);
           const wallet = await createCustodialWallet(phoneHash);
 
-          reply(twiml, 
+          reply(twiml,
             `✅ Phone number verified!\n\n` +
             `🔒 Created your secure custodial Stellar wallet:\n` +
             `Public Key: ${wallet.publicKey.substring(0, 8)}...${wallet.publicKey.substring(wallet.publicKey.length - 8)}\n\n` +
@@ -136,10 +146,14 @@ async function processWhatsAppMessage(phoneHash: string, messageBody: string, re
             `• "switch to growth"`
           );
         } else {
+          // Reset session to UNVERIFIED on lockout or expiry to unblock the user
+          if (verification.shouldResetSession) {
+            updateState(phoneHash, UserState.UNVERIFIED);
+          }
           reply(twiml, `❌ ${verification.message}`);
         }
       } else {
-        reply(twiml, 'Please enter the 6-digit verification code sent to your phone (valid for 5 minutes).');
+        reply(twiml, 'Please enter the 6-digit verification code sent to your phone (valid for 5 minutes), or send "hi" to request a new code.');
       }
       res.type('text/xml').send(twiml.toString());
       return;

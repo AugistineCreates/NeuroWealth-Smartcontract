@@ -44,29 +44,29 @@ export function generateOTP(phoneHash: string): string {
  * Verifies an OTP code for a user.
  * Enforces 5-minute expiration and max attempt limits.
  */
-export function verifyOTP(phoneHash: string, inputCode: string): { success: boolean; message: string } {
+export function verifyOTP(phoneHash: string, inputCode: string): { success: boolean; message: string; shouldResetSession: boolean } {
   const record = otpStore.get(phoneHash);
 
   if (!record) {
-    return { success: false, message: 'No OTP request found. Please send "hi" to request a new code.' };
+    return { success: false, message: 'No OTP request found. Please send "hi" to request a new code.', shouldResetSession: false };
   }
 
   if (Date.now() > record.expiresAt) {
     otpStore.delete(phoneHash);
-    return { success: false, message: 'OTP has expired (valid for 5 minutes). Please request a new code.' };
+    return { success: false, message: 'OTP has expired (valid for 5 minutes). Please send "hi" to request a new code.', shouldResetSession: true };
   }
 
   if (record.attempts >= MAX_ATTEMPTS) {
     otpStore.delete(phoneHash);
-    return { success: false, message: 'Too many invalid attempts. Please request a new OTP code.' };
+    return { success: false, message: 'Too many invalid attempts. Please send "hi" to request a new OTP code.', shouldResetSession: true };
   }
 
   if (!isOTPMatch(record.codeHash, inputCode)) {
     record.attempts += 1;
-    return { success: false, message: `Invalid OTP code. ${MAX_ATTEMPTS - record.attempts} attempts remaining.` };
+    return { success: false, message: `Invalid OTP code. ${MAX_ATTEMPTS - record.attempts} attempts remaining.`, shouldResetSession: false };
   }
 
   // Verification successful: clear OTP code
   otpStore.delete(phoneHash);
-  return { success: true, message: 'OTP verified successfully!' };
+  return { success: true, message: 'OTP verified successfully!', shouldResetSession: false };
 }
