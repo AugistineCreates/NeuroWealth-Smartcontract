@@ -2778,12 +2778,12 @@
         {
           "name": "protocol",
           "type": "Symbol",
-          "description": "The protocol harvested from (e.g., \"blend\", \"dex\")"
+          "description": "The protocol harvested from (\"blend\", \"dex\", or \"multi\")"
         },
         {
-          "name": "amount_harvested",
+          "name": "amount_cycled",
           "type": "i128",
-          "description": "Amount withdrawn and re-deposited"
+          "description": "Amount actually resupplied; not a yield amount"
         }
       ]
     },

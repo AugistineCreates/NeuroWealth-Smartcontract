@@ -243,6 +243,34 @@ fn test_rebalance_multi_60_40_split_deploys_to_both_protocols() {
 }
 
 #[test]
+fn test_harvest_multi_resupplies_by_stored_allocation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let amount = 100_000_000_i128;
+    let (vault_id, client, usdc, blend_pool, dex_pool, _user) =
+        setup_multi_funded(&env, amount);
+    let token_client = TestTokenClient::new(&env, &usdc);
+    let blend_client = MockBlendPoolClient::new(&env, &blend_pool);
+    let dex_client = MockDexPoolClient::new(&env, &dex_pool);
+
+    client.rebalance_multi(&6_000, &4_000, &0_i128);
+    assert_eq!(client.get_current_protocol(), symbol_short!("multi"));
+    let deployed_blend = client.get_deployed_to_blend();
+    let deployed_dex = client.get_deployed_to_dex();
+    assert_eq!(client.get_allocation(), (6_000, 4_000));
+
+    client.harvest(&0_i128);
+
+    assert_eq!(client.get_current_protocol(), symbol_short!("multi"));
+    assert_eq!(client.get_allocation(), (6_000, 4_000));
+    assert_eq!(client.get_deployed_to_blend(), deployed_blend);
+    assert_eq!(client.get_deployed_to_dex(), deployed_dex);
+    assert_eq!(blend_client.supplied(&usdc), deployed_blend);
+    assert_eq!(dex_client.balance(&usdc, &vault_id), deployed_dex);
+    assert_eq!(token_client.balance(&vault_id), 0);
+}
+
+#[test]
 fn test_rebalance_multi_reallocates_between_protocols() {
     let env = Env::default();
     env.mock_all_auths();

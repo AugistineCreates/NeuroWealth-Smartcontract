@@ -847,16 +847,16 @@ pub struct RebalanceEvent {
     pub amount_withdrawn: i128,
 }
 
-/// Emitted when accrued yield is harvested and compounded.
+/// Emitted when a protocol position is withdrawn and resupplied by `harvest`.
 ///
 /// # Topics
 /// - `SymbolShort("harvest")` (`TOPIC_HARVEST`) - Event identifier
 #[contracttype]
 pub struct HarvestEvent {
-    /// The protocol harvested from (e.g., "blend", "dex")
+    /// The protocol harvested from ("blend", "dex", or "multi")
     pub protocol: Symbol,
-    /// Amount withdrawn and re-deposited
-    pub amount_harvested: i128,
+    /// Amount actually resupplied; this is a compounding-cycle amount, not yield.
+    pub amount_cycled: i128,
 }
 
 /// Emitted when the owner triggers an emergency harvest fallback.
@@ -3708,12 +3708,8 @@ impl NeuroWealthVault {
     // CORE LIFECYCLE - REBALANCE
     // ==========================================================================
 
-    // NOTE: There is no `harvest()` entrypoint in this contract (Issue #496).
-    // Yield is reported via `update_total_assets()` called by the agent, which
-    // does not involve a separate harvest step. Consequently there is no
-    // `harvest()` failure path to wire into a circuit breaker. If a future
-    // version introduces a `harvest()` function, it should report outcomes to
-    // the circuit-breaker helper alongside `rebalance()`.
+    // `harvest()` is implemented below and reports its outcome to the same
+    // consecutive-failure circuit breaker as the rebalance entrypoints.
 
     /// Rebalances vault funds between yield strategies.
     ///
@@ -3849,7 +3845,7 @@ impl NeuroWealthVault {
 
             if vault_balance > 0 {
                 amount_attempted = amount_attempted.saturating_add(vault_balance);
-                let supplied = Self::supply_to_blend(&env, vault_balance, min_out);
+                let supplied = Self::supply_to_blend(&env, vault_balance, min_out, true);
                 amount_supplied = amount_supplied.saturating_add(supplied);
                 amount_moved = amount_moved.saturating_add(supplied);
 
@@ -3894,7 +3890,7 @@ impl NeuroWealthVault {
 
             if vault_balance > 0 {
                 amount_attempted = amount_attempted.saturating_add(vault_balance);
-                let supplied = Self::supply_to_dex(&env, vault_balance, min_out);
+                let supplied = Self::supply_to_dex(&env, vault_balance, min_out, true);
                 amount_supplied = amount_supplied.saturating_add(supplied);
                 amount_moved = amount_moved.saturating_add(supplied);
 
@@ -4341,7 +4337,7 @@ impl NeuroWealthVault {
             let want = min(blend_target - blend_now, available);
             if want > 0 {
                 amount_attempted = amount_attempted.saturating_add(want);
-                let supplied = Self::supply_to_blend(&env, want, min_out);
+                let supplied = Self::supply_to_blend(&env, want, min_out, false);
                 amount_supplied = amount_supplied.saturating_add(supplied);
                 available = available.saturating_sub(supplied);
             }
@@ -4352,7 +4348,7 @@ impl NeuroWealthVault {
             let want = min(dex_target - dex_now, available);
             if want > 0 {
                 amount_attempted = amount_attempted.saturating_add(want);
-                let supplied = Self::supply_to_dex(&env, want, min_out);
+                let supplied = Self::supply_to_dex(&env, want, min_out, false);
                 amount_supplied = amount_supplied.saturating_add(supplied);
             }
         }
@@ -4415,22 +4411,21 @@ impl NeuroWealthVault {
     }
 
     // ==========================================================================
-    // ADMINISTRATIVE - PAUSE CONTROL
+    // CORE LIFECYCLE - HARVEST
     // ==========================================================================
 
-    /// Pauses the vault, disabling deposits and withdrawals.
+    /// Withdraws and resupplies the active protocol position.
     ///
-    /// Emergency function to halt all user-facing operations.
-    /// When paused:
-    /// - Deposits are rejected
-    /// - Withdrawals are rejected
-    /// - Rebalancing is rejected
-    /// - Read functions remain operational
+    /// In multi-protocol mode, the resupply follows the stored Blend/DEX
+    /// allocation. This is an accounting-neutral round-trip: `TotalAssets`
+    /// does not change, and `HarvestEvent.amount_cycled` reports only the
+    /// amount actually resupplied. The operation outcome is recorded by the
+    /// shared rebalance circuit breaker.
     ///
     /// # Arguments
     ///
     /// * `env` - The Soroban environment.
-    /// * `owner` - The owner address (must authorize this call).
+    /// * `min_out` - Minimum output constraint applied to each protocol leg.
     ///
     /// # Returns
     ///
@@ -4439,7 +4434,7 @@ impl NeuroWealthVault {
     /// # Events
     ///
     /// Emits:
-    /// - `VaultPausedEvent`
+    /// - `HarvestEvent`
     ///
     /// # Errors
     ///
@@ -4447,7 +4442,9 @@ impl NeuroWealthVault {
     ///
     /// # Panics
     ///
-    /// - If the caller is not the owner.
+    /// - If the caller is not the agent.
+    /// - If the current protocol is unsupported.
+    /// - If the rebalance cooldown is active.
     pub fn harvest(env: Env, min_out: i128) {
         Self::require_initialized(&env);
         Self::require_not_paused(&env);
@@ -4465,7 +4462,10 @@ impl NeuroWealthVault {
             .get(&DataKey::CurrentProtocol)
             .unwrap_or(symbol_short!("none"));
 
-        if current_protocol == symbol_short!("none") {
+        if current_protocol != symbol_short!("blend")
+            && current_protocol != symbol_short!("dex")
+            && current_protocol != symbol_short!("multi")
+        {
             panic_with_error!(&env, VaultError::UnsupportedProtocol);
         }
 
@@ -4474,28 +4474,96 @@ impl NeuroWealthVault {
         // alternating between `rebalance` and `harvest`.
         Self::enforce_global_rate_limit(&env, RATE_LIMIT_REBALANCE);
 
-        let withdrawn = Self::withdraw_from_protocol(&env, &current_protocol, min_out);
+        let (blend_before, dex_before) = if current_protocol == symbol_short!("multi") {
+            (
+                Self::get_protocol_balance(&env, &symbol_short!("blend")),
+                Self::get_protocol_balance(&env, &symbol_short!("dex")),
+            )
+        } else if current_protocol == symbol_short!("blend") {
+            (Self::get_protocol_balance(&env, &symbol_short!("blend")), 0)
+        } else {
+            (0, Self::get_protocol_balance(&env, &symbol_short!("dex")))
+        };
+        let amount_before = blend_before.saturating_add(dex_before);
 
-        if withdrawn > 0 {
-            if current_protocol == symbol_short!("blend") {
-                Self::supply_to_blend(&env, withdrawn, min_out);
-            } else if current_protocol == symbol_short!("dex") {
-                Self::supply_to_dex(&env, withdrawn, min_out);
-            }
+        let (withdrawn_blend, withdrawn_dex) = if current_protocol == symbol_short!("multi") {
+            let blend = Self::withdraw_from_blend(&env, 0, min_out);
+            let dex = Self::withdraw_from_dex(&env, 0, min_out);
+            (blend, dex)
+        } else if current_protocol == symbol_short!("blend") {
+            (Self::withdraw_from_blend(&env, 0, min_out), 0)
+        } else {
+            (0, Self::withdraw_from_dex(&env, 0, min_out))
+        };
+        let withdrawn = withdrawn_blend.saturating_add(withdrawn_dex);
+
+        let (blend_to_supply, dex_to_supply) = if current_protocol == symbol_short!("multi") {
+            let (blend_bps, dex_bps) = Self::read_allocation(&env);
+            Self::split_by_bps(withdrawn, blend_bps, dex_bps)
+        } else if current_protocol == symbol_short!("blend") {
+            (withdrawn, 0)
+        } else {
+            (0, withdrawn)
+        };
+
+        let supplied_blend = if blend_to_supply > 0 {
+            Self::supply_to_blend(
+                &env,
+                blend_to_supply,
+                min_out,
+                current_protocol != symbol_short!("multi"),
+            )
+        } else {
+            0
+        };
+        let supplied_dex = if dex_to_supply > 0 {
+            Self::supply_to_dex(
+                &env,
+                dex_to_supply,
+                min_out,
+                current_protocol != symbol_short!("multi"),
+            )
+        } else {
+            0
+        };
+        let supplied = supplied_blend.saturating_add(supplied_dex);
+        if current_protocol == symbol_short!("multi") {
+            Self::sync_deployed_split(&env);
         }
+
+        let status = if amount_before == 0 {
+            symbol_short!("success")
+        } else if withdrawn == 0
+            || (blend_to_supply.saturating_add(dex_to_supply) > 0 && supplied == 0)
+        {
+            symbol_short!("failed")
+        } else if withdrawn < amount_before
+            || supplied_blend < blend_to_supply
+            || supplied_dex < dex_to_supply
+        {
+            symbol_short!("partial")
+        } else {
+            symbol_short!("success")
+        };
 
         env.events().publish(
             (TOPIC_HARVEST,),
             HarvestEvent {
                 protocol: current_protocol,
-                amount_harvested: withdrawn,
+                amount_cycled: supplied,
             },
         );
+
+        Self::record_rebalance_outcome(&env, &status);
 
         env.storage()
             .instance()
             .set(&DataKey::LastRebalanceLedger, &env.ledger().sequence());
     }
+
+    // ==========================================================================
+    // ADMINISTRATIVE - PAUSE CONTROL
+    // ==========================================================================
 
     /// Pauses deposits, withdrawals, and agent operations until the owner calls
     /// `unpause` or a circuit-breaker reset path.
@@ -4701,9 +4769,9 @@ impl NeuroWealthVault {
 
         if withdrawn > 0 {
             if current_protocol == symbol_short!("blend") {
-                Self::supply_to_blend(&env, withdrawn, min_out);
+                Self::supply_to_blend(&env, withdrawn, min_out, true);
             } else if current_protocol == symbol_short!("dex") {
-                Self::supply_to_dex(&env, withdrawn, min_out);
+                Self::supply_to_dex(&env, withdrawn, min_out, true);
             }
         }
 
@@ -10578,7 +10646,12 @@ impl NeuroWealthVault {
     /// - Panics if Blend pool address is not configured
     /// - Emits BlendSupplyEvent with success status
     /// - Uses the shared approval TTL configuration from instance storage to set the approval expiry
-    fn supply_to_blend(env: &Env, amount: i128, min_out: i128) -> i128 {
+    fn supply_to_blend(
+        env: &Env,
+        amount: i128,
+        min_out: i128,
+        update_current_protocol: bool,
+    ) -> i128 {
         if amount <= 0 {
             return 0;
         }
@@ -10679,7 +10752,7 @@ impl NeuroWealthVault {
             "blend supply",
         );
 
-        if supplied > 0 {
+        if supplied > 0 && update_current_protocol {
             Self::set_current_protocol(env, symbol_short!("blend"));
         }
 
@@ -10788,7 +10861,12 @@ impl NeuroWealthVault {
     /// - Panics if the DEX pool address is not configured
     /// - Panics with `MinOutNotMet` if the realized amount is below `min_out`
     /// - Emits `DexSupplyEvent` with success status
-    fn supply_to_dex(env: &Env, amount: i128, min_out: i128) -> i128 {
+    fn supply_to_dex(
+        env: &Env,
+        amount: i128,
+        min_out: i128,
+        update_current_protocol: bool,
+    ) -> i128 {
         if amount <= 0 {
             return 0;
         }
@@ -10885,7 +10963,7 @@ impl NeuroWealthVault {
             "dex supply",
         );
 
-        if supplied > 0 {
+        if supplied > 0 && update_current_protocol {
             Self::set_current_protocol(env, symbol_short!("dex"));
         }
 

@@ -95,7 +95,7 @@ pub const TOPIC_APPROVAL_TTL_UPDATED: Symbol = symbol_short!("ttl_upd");
 /// and the legacy `set_blend_approval_ttl` so operators learn the approval
 /// expiry ledger without reading transaction history (#847).
 pub const TOPIC_APPROVAL_TTL_SCHEDULED: Symbol = symbol_short!("ttl_sch");
-/// Topic for `HarvestEvent`, published when accrued yield is harvested and compounded.
+/// Topic for `HarvestEvent`, published when a protocol position is cycled by `harvest`.
 pub const TOPIC_HARVEST: Symbol = symbol_short!("harvest");
 /// Topic for `EmergencyHarvestEvent`, published when the owner triggers an
 /// emergency harvest fallback during an agent-key outage or rotation.
