@@ -21,7 +21,7 @@ Traditional savings accounts offer near-zero interest. Traditional DeFi is too c
 | 🤖 AI Agent | Autonomous 24/7 yield optimization across Stellar DeFi |
 | 💬 Natural Language | Chat to deposit, withdraw, and check balances |
 | 📈 Auto-Rebalancing | Agent shifts funds to best opportunities automatically |
-| 🔐 Non-Custodial | Your funds live in audited Soroban smart contracts |
+| 🔐 Non-Custodial | Your funds live in non-custodial Soroban smart contracts |
 | ⚡ Instant Withdrawals | No lock-ups, no penalties, withdraw anytime |
 | 📱 WhatsApp Ready | Full functionality through WhatsApp chat interface |
 | 🌍 Global Access | No geographic restrictions, no bank account required |
@@ -59,9 +59,9 @@ Security: OpenZeppelin-equivalent patterns (Pausable, Access Control) and strict
 
 ### Backend / AI Agent
 
-Runtime: Node.js or Python
+Runtime: Node.js
 Stellar SDK: @stellar/stellar-sdk
-AI: Claude API / OpenAI for natural language intent parsing
+AI: OpenAI intent parsing in `agent/`. The WhatsApp bot uses a keyword/regex parser. Claude is not integrated
 Database: PostgreSQL / Supabase for user position tracking
 Scheduling: In-memory priority queue with gas awareness (RebalanceScheduler)
 
@@ -82,6 +82,7 @@ Price Feeds: Stellar anchor price feeds
 
 ```text
 NeuroWealth-Smartcontract/
+├── agent/                          # AI agent backend (implemented; see agent/README.md)
 ├── neurowealth-vault/              # Soroban smart contracts workspace
 │   ├── Cargo.toml
 │   ├── Cargo.lock
@@ -562,8 +563,8 @@ Webhook: Same server as agent, or a separate serverless function
 ### Phase 1 — Foundation (Current)
 
  Soroban vault contract (deposit, withdraw, rebalance)
- Basic AI agent with Blend protocol integration
- Natural language intent parsing
+ Basic AI agent with Blend protocol integration (`agent/` is implemented, not a planned placeholder)
+ OpenAI intent parsing in the agent, and keyword/regex parsing in the WhatsApp bot
  Web frontend with portfolio dashboard
   WhatsApp bot MVP
 
@@ -607,3 +608,6 @@ buckets. `batch_deposit` is also bounded by `set_max_batch_size` (default 50
 entries). See [`ARCHITECTURE.md`](ARCHITECTURE.md) and
 [`SECURITY.md`](SECURITY.md) for defaults, storage, events, and operational
 guidance.
+
+
+--

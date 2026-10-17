@@ -95,7 +95,7 @@ pub const TOPIC_APPROVAL_TTL_UPDATED: Symbol = symbol_short!("ttl_upd");
 /// and the legacy `set_blend_approval_ttl` so operators learn the approval
 /// expiry ledger without reading transaction history (#847).
 pub const TOPIC_APPROVAL_TTL_SCHEDULED: Symbol = symbol_short!("ttl_sch");
-/// Topic for `HarvestEvent`, published when accrued yield is harvested and compounded.
+/// Topic for `HarvestEvent`, published when a protocol position is cycled by `harvest`.
 pub const TOPIC_HARVEST: Symbol = symbol_short!("harvest");
 /// Topic for `EmergencyHarvestEvent`, published when the owner triggers an
 /// emergency harvest fallback during an agent-key outage or rotation.
@@ -137,7 +137,6 @@ pub const TOPIC_PROTOCOL_APY_UPDATED: Symbol = symbol_short!("apy_upd");
 /// `set_max_consecutive_failures` when the circuit-breaker threshold changes.
 pub const TOPIC_MAX_FAILURES_UPDATED: Symbol = symbol_short!("maxf_upd");
 
-
 /// Topic for `InsuranceFundUpdatedEvent`.
 pub const TOPIC_INSURANCE_FUND_UPDATED: Symbol = symbol_short!("ins_fund");
 
@@ -147,10 +146,6 @@ pub const TOPIC_RATE_LIMIT_CONFIG_UPDATED: Symbol = symbol_short!("rate_cfg");
 pub const TOPIC_BATCH_SIZE_LIMIT_UPDATED: Symbol = symbol_short!("batch_lim");
 /// Topic for `RateLimitExceededEvent`, published before a rate-limited call is rejected.
 pub const TOPIC_RATE_LIMIT_HIT: Symbol = symbol_short!("rate_hit");
-
-/// Topic for `MaxConsecutiveFailuresUpdatedEvent`, published by
-/// `set_max_consecutive_failures` when the circuit-breaker threshold changes.
-pub const TOPIC_MAX_FAILURES_UPDATED: Symbol = symbol_short!("maxf_upd");
 
 // ============================================================================
 // Multi-protocol adapter events (#656)

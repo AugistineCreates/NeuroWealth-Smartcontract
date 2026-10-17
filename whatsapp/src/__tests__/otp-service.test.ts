@@ -53,6 +53,7 @@ describe('verifyOTP – success', () => {
     const code = generateOTP(hash);
     const result = verifyOTP(hash, code);
     assert.equal(result.success, true);
+    assert.equal(result.shouldResetSession, false);
     assert.match(result.message, /verified/i);
   });
 
@@ -81,6 +82,7 @@ describe('verifyOTP – failure paths', () => {
   test('returns success: false when no OTP has been requested', () => {
     const result = verifyOTP(ph(), '123456');
     assert.equal(result.success, false);
+    assert.equal(result.shouldResetSession, false);
     assert.match(result.message, /no otp/i);
   });
 
@@ -89,6 +91,7 @@ describe('verifyOTP – failure paths', () => {
     generateOTP(hash);
     const result = verifyOTP(hash, '000000');
     assert.equal(result.success, false);
+    assert.equal(result.shouldResetSession, false);
     assert.match(result.message, /invalid otp/i);
   });
 
@@ -96,8 +99,10 @@ describe('verifyOTP – failure paths', () => {
     const hash = ph();
     generateOTP(hash);
     const r1 = verifyOTP(hash, '000000');
+    assert.equal(r1.shouldResetSession, false);
     assert.match(r1.message, /2 attempts remaining/i);
     const r2 = verifyOTP(hash, '000000');
+    assert.equal(r2.shouldResetSession, false);
     assert.match(r2.message, /1 attempt/i);
   });
 });
@@ -121,10 +126,12 @@ describe('verifyOTP – attempt limits', () => {
     // Attempt 4: record.attempts is now 3 >= MAX_ATTEMPTS → "Too many", OTP deleted
     const r4 = verifyOTP(hash, '000000');
     assert.equal(r4.success, false);
+    assert.equal(r4.shouldResetSession, true);
     assert.match(r4.message, /too many/i);
     // Attempt 5: OTP deleted → "no OTP"
     const r5 = verifyOTP(hash, '000000');
     assert.equal(r5.success, false);
+    assert.equal(r5.shouldResetSession, false);
     assert.match(r5.message, /no otp/i);
   });
 
@@ -154,5 +161,23 @@ describe('verifyOTP – expiration', () => {
     const code = generateOTP(hash);
     const result = verifyOTP(hash, code);
     assert.equal(result.success, true, 'freshly generated OTP should still be valid');
+  });
+
+  test('expired OTP signals session reset (#1002)', () => {
+    const hash = ph();
+    generateOTP(hash);
+
+    // Mock Date.now to simulate expiry
+    const originalDateNow = Date.now;
+    Date.now = () => originalDateNow() + 600000; // 10 minutes later
+
+    try {
+      const result = verifyOTP(hash, '123456');
+      assert.equal(result.success, false);
+      assert.equal(result.shouldResetSession, true);
+      assert.match(result.message, /expired/i);
+    } finally {
+      Date.now = originalDateNow;
+    }
   });
 });

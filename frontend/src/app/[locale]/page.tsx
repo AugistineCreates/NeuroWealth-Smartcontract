@@ -59,20 +59,24 @@ export default function DashboardPage() {
     setError(null);
 
     try {
-      const [state, earnData, chart, txs] = await Promise.all([
+      const [stateResult, earnData, chart, txs] = await Promise.all([
         fetchVaultState(publicKey),
         getEarningsSummary(publicKey),
         getPortfolioValueHistory(publicKey),
         getRecentTransactions(publicKey),
       ]);
 
-      setVaultState(state);
+      if (!stateResult.ok) {
+        throw new Error(stateResult.error);
+      }
+
+      setVaultState(stateResult.state);
       setEarnings(earnData);
       setChartData(chart);
       setTransactions(txs);
     } catch (err) {
       console.error('Failed to load dashboard data:', err);
-      setError('Failed to load dashboard data. Please try again.');
+      setError(err instanceof Error ? err.message : 'Failed to load dashboard data. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -146,6 +150,10 @@ export default function DashboardPage() {
                   <SkeletonCard />
                   <SkeletonCard />
                 </>
+              ) : error && publicKey ? (
+                <div role="status" className="md:col-span-3 glass-panel rounded-2xl p-6 text-sm text-slate-300">
+                  Vault balances could not be loaded.
+                </div>
               ) : (
                 <>
                   <BalanceCard

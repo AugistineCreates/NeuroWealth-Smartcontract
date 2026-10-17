@@ -406,12 +406,12 @@ export class VaultEventListener {
     this.running = true;
     this.abortController = new AbortController();
 
-    let cursorLedger = startLedger ?? (await this.getLatestLedger());
+    const initialLedger = startLedger ?? (await this.getLatestLedger());
+    let cursor: string | undefined;
 
     while (this.running) {
       try {
-        const events = await this.server.getEvents({
-          startLedger: cursorLedger,
+        const request: StellarSdk.SorobanRpc.Server.GetEventsRequest = {
           limit: this.batchSize,
           filters: [
             {
@@ -419,18 +419,17 @@ export class VaultEventListener {
               contractIds: [this.contractId],
             },
           ],
-        });
+          ...(cursor ? { cursor } : { startLedger: initialLedger }),
+        };
+        const events = await this.server.getEvents(request);
 
         for (const event of events.events) {
           this.dispatchEvent(event);
         }
 
-        if (events.events.length > 0) {
-          const lastEvent = events.events[events.events.length - 1];
-          const ledgerSeq = lastEvent.ledger;
-          if (ledgerSeq) {
-            cursorLedger = Number(ledgerSeq) + 1;
-          }
+        const lastEvent = events.events[events.events.length - 1];
+        if (lastEvent?.pagingToken) {
+          cursor = lastEvent.pagingToken;
         }
 
         // If we got fewer events than the batch size, wait before polling again

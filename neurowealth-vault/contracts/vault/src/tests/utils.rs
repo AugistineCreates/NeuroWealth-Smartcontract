@@ -280,7 +280,7 @@ pub mod blend {
         }
 
         /// Sets a max withdraw limit to simulate withdrawal failures/stuck funds.
-        /// 0 = no limit (default behavior)
+        /// 0 = no limit; negative = reject all withdrawals.
         pub fn set_max_withdraw_limit(env: Env, limit: i128) {
             env.storage()
                 .persistent()
@@ -308,7 +308,9 @@ pub mod blend {
                         .get(&BlendMockDataKey::MaxWithdrawLimit)
                         .unwrap_or(0);
 
-                    let actual_withdraw = if max_withdraw_limit > 0 {
+                    let actual_withdraw = if max_withdraw_limit < 0 {
+                        0
+                    } else if max_withdraw_limit > 0 {
                         core::cmp::min(amount_to_withdraw, max_withdraw_limit)
                     } else {
                         amount_to_withdraw

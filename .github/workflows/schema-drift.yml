@@ -13,6 +13,8 @@ jobs:
   schema-drift:
     name: Schema drift check
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -21,7 +23,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Check db/types.ts against supabase/migrations
         run: |
