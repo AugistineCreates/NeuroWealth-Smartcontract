@@ -18,6 +18,7 @@ const logger = pino({ name: 'whatsapp-webhook' });
 
 import { getSession, updateState, checkRateLimit, UserState } from './stateManager';
 import { generateOTP, verifyOTP } from './otpService';
+import { sendOtpSms } from './smsService';
 import { createCustodialWallet, getWallet } from './walletService';
 import { parseIntent } from './intentParser';
 import { validateIntent } from './contractLimits';
@@ -87,8 +88,10 @@ export async function handleWhatsAppWebhook(req: Request, res: Response): Promis
   // duplicate observes the first delivery's final state.
   const idempotencyKey = deriveIdempotencyKey(req.body, req.headers?.['i-twilio-idempotency-token']);
   const messageSid = typeof req.body?.MessageSid === 'string' && req.body.MessageSid !== '' ? req.body.MessageSid : null;
+  // The raw number is only used in-flight to deliver the OTP via SMS (#942);
+  // it is never persisted, only the hash is.
   await runExclusive(phoneHash, () =>
-    processIdempotently(idempotencyKey, messageSid, phoneHash, commandCheck.value, res)
+    processIdempotently(idempotencyKey, messageSid, phoneHash, fromCheck.value, commandCheck.value, res)
   );
 }
 
@@ -103,12 +106,13 @@ async function processIdempotently(
   idempotencyKey: string | null,
   messageSid: string | null,
   phoneHash: string,
+  rawPhoneNumber: string,
   messageBody: string,
   res: Response
 ): Promise<void> {
   if (!idempotencyKey) {
     logger.warn({ phoneHash }, 'Inbound webhook has no MessageSid or idempotency token; processing without deduplication');
-    await respondWithCommand(null, null, 0, phoneHash, messageBody, res);
+    await respondWithCommand(null, null, 0, phoneHash, rawPhoneNumber, messageBody, res);
     return;
   }
 
@@ -142,7 +146,7 @@ async function processIdempotently(
       res.status(409).send('Message is already being processed');
       return;
     case 'acquired':
-      await respondWithCommand(idempotencyKey, store, claim.attempt, phoneHash, messageBody, res);
+      await respondWithCommand(idempotencyKey, store, claim.attempt, phoneHash, rawPhoneNumber, messageBody, res);
       return;
   }
 }
@@ -152,6 +156,7 @@ async function respondWithCommand(
   store: IdempotencyStore | null,
   attempt: number,
   phoneHash: string,
+  rawPhoneNumber: string,
   messageBody: string,
   res: Response
 ): Promise<void> {
@@ -159,7 +164,7 @@ async function respondWithCommand(
 
   let replyXml: string;
   try {
-    replyXml = await processWhatsAppMessage(phoneHash, messageBody, guard);
+    replyXml = await processWhatsAppMessage(phoneHash, rawPhoneNumber, messageBody, guard);
   } catch (error) {
     if (error instanceof LeaseLostError) {
       logger.warn({ phoneHash, idempotencyKey, attempt }, 'Lost idempotency lease before side effects; aborting attempt');
@@ -201,7 +206,12 @@ async function respondWithCommand(
  * delivery can be retried, while any error after it becomes a terminal
  * user-facing reply, because the command may already have partially applied.
  */
-async function processWhatsAppMessage(phoneHash: string, messageBody: string, guard: SideEffectGuard): Promise<string> {
+async function processWhatsAppMessage(
+  phoneHash: string,
+  rawPhoneNumber: string,
+  messageBody: string,
+  guard: SideEffectGuard
+): Promise<string> {
   const twiml = new MessagingResponse();
 
   // Enforce per-phone rate limiting
@@ -229,21 +239,44 @@ async function processWhatsAppMessage(phoneHash: string, messageBody: string, gu
       if (intent.type === 'GREETING' || intent.type === 'UNKNOWN') {
         await guard.begin();
         const otpCode = await generateOTP(phoneHash);
-        await updateState(phoneHash, UserState.AWAITING_OTP);
 
-        // In production, Twilio SMS/WhatsApp sends this OTP code.
-        // For testing/mocking, we include instructions in response.
-        reply(twiml, 
-          `👋 Welcome to NeuroWealth AI!\n\nTo secure your wallet, please enter your 6-digit OTP verification code.\n\n🔑 Your OTP code is: ${otpCode}\n(Code expires in 5 minutes)`
-        );
+        try {
+          // The OTP is delivered via SMS only; it must never appear in the
+          // WhatsApp chat reply (#942).
+          await sendOtpSms(rawPhoneNumber, otpCode);
+          await updateState(phoneHash, UserState.AWAITING_OTP);
+          reply(twiml,
+            `👋 Welcome to NeuroWealth AI!\n\nTo secure your wallet, we sent a 6-digit verification code to your phone via SMS. Please reply with that code.\n(Code expires in 5 minutes)`
+          );
+        } catch (error) {
+          logger.error({ error: error instanceof Error ? error.message : error }, 'Failed to send OTP SMS');
+          reply(twiml, '❌ We could not send your verification code. Please try again in a few minutes.');
+        }
       } else {
         reply(twiml, 'Welcome to NeuroWealth! Send "hi" to begin account verification.');
       }
       return twiml.toString();
     }
 
-    // Flow 2: AWAITING_OTP -> Verify OTP input code
+    // Flow 2: AWAITING_OTP -> Verify OTP input code or allow "hi" to request new code
     if (session.state === UserState.AWAITING_OTP) {
+      // Allow "hi" to request a new OTP code (helps users recover from lockout/expiry)
+      if (intent.type === 'GREETING' || intent.type === 'UNKNOWN') {
+        await guard.begin();
+        const otpCode = await generateOTP(phoneHash);
+
+        try {
+          await sendOtpSms(rawPhoneNumber, otpCode);
+          reply(twiml,
+            `🔑 A new verification code was sent to your phone via SMS.\n\n(Code expires in 5 minutes)`
+          );
+        } catch (error) {
+          logger.error({ error: error instanceof Error ? error.message : error }, 'Failed to send OTP SMS');
+          reply(twiml, '❌ We could not send your verification code. Please try again in a few minutes.');
+        }
+        return twiml.toString();
+      }
+
       if (intent.type === 'OTP_CODE' && intent.otpCode) {
         // verifyOTP consumes attempts / the code itself.
         await guard.begin();
@@ -253,7 +286,7 @@ async function processWhatsAppMessage(phoneHash: string, messageBody: string, gu
           await updateState(phoneHash, UserState.VERIFIED);
           const wallet = await createCustodialWallet(phoneHash);
 
-          reply(twiml, 
+          reply(twiml,
             `✅ Phone number verified!\n\n` +
             `🔒 Created your secure custodial Stellar wallet:\n` +
             `Public Key: ${wallet.publicKey.substring(0, 8)}...${wallet.publicKey.substring(wallet.publicKey.length - 8)}\n\n` +
@@ -264,10 +297,14 @@ async function processWhatsAppMessage(phoneHash: string, messageBody: string, gu
             `• "switch to growth"`
           );
         } else {
+          // Reset session to UNVERIFIED on lockout or expiry to unblock the user
+          if (verification.shouldResetSession) {
+            await updateState(phoneHash, UserState.UNVERIFIED);
+          }
           reply(twiml, `❌ ${verification.message}`);
         }
       } else {
-        reply(twiml, 'Please enter the 6-digit verification code sent to your phone (valid for 5 minutes).');
+        reply(twiml, 'Please enter the 6-digit verification code sent to your phone (valid for 5 minutes), or send "hi" to request a new code.');
       }
       return twiml.toString();
     }

@@ -4,16 +4,21 @@ on:
   pull_request:
     branches: ["main", "develop"]
     paths:
-      - 'neurowealth-vault/**'
-      - 'contracts/**'
-      - 'scripts/generate-spec.py'
-      - 'scripts/validate-spec.py'
-      - 'contract-spec.json'
+      - "neurowealth-vault/**"
+      - "contracts/**"
+      - "scripts/generate-spec.py"
+      - "scripts/validate-spec.py"
+      - "contract-spec.json"
+
+permissions:
+  contents: read
 
 jobs:
   spec-drift:
     name: Spec drift check
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -22,7 +27,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Generate fresh contract spec
         run: |

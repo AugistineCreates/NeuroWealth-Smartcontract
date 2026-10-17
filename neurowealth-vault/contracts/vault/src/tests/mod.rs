@@ -55,6 +55,7 @@ mod test_security_agent_drain;
 mod test_share_conversion_proptest;
 mod test_share_locking;
 mod test_shares;
+mod test_standby_agent;
 mod test_stale_state_audit;
 mod test_storage_griefing_analysis;
 mod test_strategy_switch_low_liquidity;
@@ -97,4 +98,5 @@ mod test_performance_fee;
 mod test_user_apy;
 mod test_insurance_fund;
 mod test_withdrawal_queue;
+mod test_pause_queue_breaker_matrix_proptest;
 

@@ -34,27 +34,27 @@ export async function generateOTP(phoneHash: string): Promise<string> {
  * attempt atomically in the database, so replicas cannot exceed the limit by
  * guessing in parallel, and a correct code can be redeemed only once.
  */
-export async function verifyOTP(phoneHash: string, inputCode: string): Promise<{ success: boolean; message: string }> {
+export async function verifyOTP(phoneHash: string, inputCode: string): Promise<{ success: boolean; message: string; shouldResetSession: boolean }> {
   const store = getStateStore();
   const attempt = await store.attemptOtp(phoneHash, Date.now(), MAX_ATTEMPTS);
 
   switch (attempt.kind) {
     case 'none':
-      return { success: false, message: 'No OTP request found. Please send "hi" to request a new code.' };
+      return { success: false, message: 'No OTP request found. Please send "hi" to request a new code.', shouldResetSession: false };
     case 'expired':
-      return { success: false, message: 'OTP has expired (valid for 5 minutes). Please request a new code.' };
+      return { success: false, message: 'OTP has expired (valid for 5 minutes). Please send "hi" to request a new code.', shouldResetSession: true };
     case 'locked':
-      return { success: false, message: 'Too many invalid attempts. Please request a new OTP code.' };
+      return { success: false, message: 'Too many invalid attempts. Please send "hi" to request a new OTP code.', shouldResetSession: true };
   }
 
   if (!isOTPMatch(phoneHash, attempt.codeHash, inputCode)) {
-    return { success: false, message: `Invalid OTP code. ${Math.max(MAX_ATTEMPTS - attempt.attempts, 0)} attempts remaining.` };
+    return { success: false, message: `Invalid OTP code. ${Math.max(MAX_ATTEMPTS - attempt.attempts, 0)} attempts remaining.`, shouldResetSession: false };
   }
 
   // Verification successful: consume the code. Losing this race means another
   // replica already redeemed it.
   if (!(await store.consumeOtp(phoneHash, attempt.codeHash))) {
-    return { success: false, message: 'No OTP request found. Please send "hi" to request a new code.' };
+    return { success: false, message: 'No OTP request found. Please send "hi" to request a new code.', shouldResetSession: false };
   }
-  return { success: true, message: 'OTP verified successfully!' };
+  return { success: true, message: 'OTP verified successfully!', shouldResetSession: false };
 }

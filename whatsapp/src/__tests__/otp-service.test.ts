@@ -56,6 +56,7 @@ describe('verifyOTP – success', () => {
     const code = (await generateOTP(hash));
     const result = (await verifyOTP(hash, code));
     assert.equal(result.success, true);
+    assert.equal(result.shouldResetSession, false);
     assert.match(result.message, /verified/i);
   });
 
@@ -84,6 +85,7 @@ describe('verifyOTP – failure paths', () => {
   test('returns success: false when no OTP has been requested', async () => {
     const result = (await verifyOTP(ph(), '123456'));
     assert.equal(result.success, false);
+    assert.equal(result.shouldResetSession, false);
     assert.match(result.message, /no otp/i);
   });
 
@@ -92,6 +94,7 @@ describe('verifyOTP – failure paths', () => {
     (await generateOTP(hash));
     const result = (await verifyOTP(hash, '000000'));
     assert.equal(result.success, false);
+    assert.equal(result.shouldResetSession, false);
     assert.match(result.message, /invalid otp/i);
   });
 
@@ -99,8 +102,10 @@ describe('verifyOTP – failure paths', () => {
     const hash = ph();
     (await generateOTP(hash));
     const r1 = (await verifyOTP(hash, '000000'));
+    assert.equal(r1.shouldResetSession, false);
     assert.match(r1.message, /2 attempts remaining/i);
     const r2 = (await verifyOTP(hash, '000000'));
+    assert.equal(r2.shouldResetSession, false);
     assert.match(r2.message, /1 attempt/i);
   });
 });
@@ -124,10 +129,12 @@ describe('verifyOTP – attempt limits', () => {
     // Attempt 4: record.attempts is now 3 >= MAX_ATTEMPTS → "Too many", OTP deleted
     const r4 = (await verifyOTP(hash, '000000'));
     assert.equal(r4.success, false);
+    assert.equal(r4.shouldResetSession, true);
     assert.match(r4.message, /too many/i);
     // Attempt 5: OTP deleted → "no OTP"
     const r5 = (await verifyOTP(hash, '000000'));
     assert.equal(r5.success, false);
+    assert.equal(r5.shouldResetSession, false);
     assert.match(r5.message, /no otp/i);
   });
 
@@ -157,5 +164,23 @@ describe('verifyOTP – expiration', () => {
     const code = (await generateOTP(hash));
     const result = (await verifyOTP(hash, code));
     assert.equal(result.success, true, 'freshly generated OTP should still be valid');
+  });
+
+  test('expired OTP signals session reset (#1002)', async () => {
+    const hash = ph();
+    (await generateOTP(hash));
+
+    // Mock Date.now to simulate expiry
+    const originalDateNow = Date.now;
+    Date.now = () => originalDateNow() + 600000; // 10 minutes later
+
+    try {
+      const result = (await verifyOTP(hash, '123456'));
+      assert.equal(result.success, false);
+      assert.equal(result.shouldResetSession, true);
+      assert.match(result.message, /expired/i);
+    } finally {
+      Date.now = originalDateNow;
+    }
   });
 });

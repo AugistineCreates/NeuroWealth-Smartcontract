@@ -92,6 +92,7 @@ import { createCustodialWallet } from '../walletService';
 import { updateState, UserState } from '../stateManager';
 import { InMemoryStateStore, setStateStore } from '../stateStore';
 import { hashPhoneNumber } from '../cryptoUtils';
+import { smsClient } from '../smsService';
 import {
   deriveIdempotencyKey,
   InMemoryIdempotencyStore,
@@ -106,6 +107,13 @@ const LEASE_MS = 60_000;
 let clock = Date.now();
 let store: InMemoryIdempotencyStore;
 
+// OTP codes are delivered via SMS only (#942); capture them from a stubbed
+// SMS client instead of the chat reply.
+let smsCodes: string[] = [];
+function lastSmsCode(): string | undefined {
+  return smsCodes[smsCodes.length - 1];
+}
+
 beforeEach(() => {
   clock = Date.now();
   store = new InMemoryIdempotencyStore(() => clock);
@@ -113,6 +121,11 @@ beforeEach(() => {
   setIdempotencyStore(store);
   faults.select = 0;
   faults.insert = 0;
+  smsCodes = [];
+  smsClient.send = async (_to: string, body: string) => {
+    const match = /\d{6}/.exec(body);
+    if (match) smsCodes.push(match[0]);
+  };
 });
 
 let phoneCounter = 0;
@@ -307,9 +320,9 @@ describe('inbound webhook idempotency', () => {
   test('a failure after side effects started is terminal and never re-run', async () => {
     const phone = nextPhone();
 
-    const hi = await deliver(phone, 'hi', nextSid());
-    const otp = /Your OTP code is: (\d{6})/.exec(hi.body)?.[1];
-    assert.ok(otp, 'expected an OTP in the greeting reply');
+    await deliver(phone, 'hi', nextSid());
+    const otp = lastSmsCode();
+    assert.ok(otp, 'expected an OTP to be sent via SMS');
 
     // OTP is consumed, then wallet creation hits a transient error.
     const sid = nextSid();
@@ -379,13 +392,14 @@ describe('replayed verification-flow webhooks (#945)', () => {
     const phone = nextPhone();
     const sid = nextSid();
 
-    const first = await deliver(phone, 'hi', sid);
-    const code = /Your OTP code is: (\d{6})/.exec(first.body)?.[1];
-    assert.ok(code, 'expected an OTP in the greeting reply');
+    await deliver(phone, 'hi', sid);
+    const code = lastSmsCode();
+    assert.ok(code, 'expected an OTP to be sent via SMS');
 
     const replay = await deliver(phone, 'hi', sid);
     assert.equal(replay.status, 200);
     assert.ok(hasNoMessage(replay), 'a replay must not reveal or reissue an OTP');
+    assert.equal(smsCodes.length, 1, 'a replay must not send a second OTP SMS');
 
     // The original code is still the live one (a reissue would have replaced it).
     const verified = await deliver(phone, code, nextSid());
@@ -394,8 +408,8 @@ describe('replayed verification-flow webhooks (#945)', () => {
 
   test('a replayed OTP submission does not verify twice or create a second wallet', async () => {
     const phone = nextPhone();
-    const hi = await deliver(phone, 'hi', nextSid());
-    const code = /Your OTP code is: (\d{6})/.exec(hi.body)?.[1] as string;
+    await deliver(phone, 'hi', nextSid());
+    const code = lastSmsCode() as string;
 
     const sid = nextSid();
     const before = countReplies(/Phone number verified/);
@@ -411,8 +425,8 @@ describe('replayed verification-flow webhooks (#945)', () => {
 
   test('a replay of a failed OTP guess does not burn an extra attempt', async () => {
     const phone = nextPhone();
-    const hi = await deliver(phone, 'hi', nextSid());
-    const code = /Your OTP code is: (\d{6})/.exec(hi.body)?.[1] as string;
+    await deliver(phone, 'hi', nextSid());
+    const code = lastSmsCode() as string;
     const wrong = code === '000000' ? '111111' : '000000';
 
     const sid = nextSid();

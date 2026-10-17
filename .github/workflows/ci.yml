@@ -10,7 +10,7 @@ on:
     - cron: "0 3 * * 0"
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   # Maximum allowed size in bytes for the optimised contract WASM.
@@ -29,7 +29,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    steps:
       - name: Checkout (full history)
         uses: actions/checkout@v4
         with:
@@ -63,6 +62,8 @@ jobs:
   ci-matrix:
     name: CI Matrix
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -347,6 +348,8 @@ jobs:
     name: Kani Share-Accounting Proofs
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -358,24 +361,21 @@ jobs:
   cargo-deny:
     name: Dependency Audit (cargo-deny)
     runs-on: ubuntu-latest
-    # The workflow-level weekly cron (Sunday 03:00 UTC) re-runs this job
-    # against a fresh RustSec advisory database, so advisories published
-    # against pinned dependencies surface without waiting for a PR.
     permissions:
       contents: read
       issues: write
+    # The workflow-level weekly cron (Sunday 03:00 UTC) re-runs this job
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Run cargo-deny
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: EmbarkStudios/cargo-deny-action@v2.0.0
         with:
           command: check
           # The vault workspace manifest drives the dependency graph.
           manifest-path: ./neurowealth-vault/Cargo.toml
-          # Policy lives in deny.toml at the repo root.
-          command-arguments: "--config deny.toml"
+          # Policy lives in deny.toml at the repo root (auto-discovered by cargo-deny).
           # Respect the [graph] settings in deny.toml instead of forcing
           # --all-features (the action's default).
           arguments: ""
@@ -430,15 +430,9 @@ jobs:
     name: Reproducible Build Check
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Two clean uncached builds are expensive, so this runs where an
-    # attestation matters — weekly, on demand, and on pushes to main —
-    # rather than on every PR.
-    if: |
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')
     permissions:
       contents: read
+    # Two clean uncached builds are expensive, so this runs where an
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -459,6 +453,8 @@ jobs:
   readme-check:
     name: README Validation
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -469,6 +465,8 @@ jobs:
   security-audit:
     name: Security Documentation Audit
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -479,6 +477,9 @@ jobs:
       - name: Verify auth matrix against source (lib.rs)
         run: python3 scripts/check-auth-matrix.py
 
+      - name: Soroban pitfall lints (storage unwrap / init / auth)
+        run: python3 scripts/check-soroban-lints.py
+
       - name: Verify DataKey::Balance deprecation
         run: bash scripts/check-balance-deprecation.sh
 
@@ -488,6 +489,8 @@ jobs:
   changes:
     name: Detect changes
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       contract: ${{ steps.filter.outputs.contract }}
       vault_src: ${{ steps.filter.outputs.vault_src }}
@@ -511,7 +514,13 @@ jobs:
     name: Fuzz ${{ matrix.target }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     needs: [changes]
+    # Note: All 9 fuzz targets run in CI. Runtime considerations:
+    # - PR: 9 targets × 120s = ~18 minutes total (parallelized)
+    # - Scheduled: 9 targets × 300s = ~45 minutes total (parallelized)
+    # The timeout-minutes: 10 applies per target, not per matrix.
     if: |
       github.event_name == 'schedule' ||
       (github.event_name == 'pull_request' && needs.changes.outputs.vault_src == 'true')
@@ -524,6 +533,10 @@ jobs:
           - rounding_boundaries
           - share_accounting_invariants
           - agent_update_timelock
+          - admin_timelock_interleaved
+          - harvest_sequence
+          - upgrade_timelock
+          - user_strategy
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -556,6 +569,8 @@ jobs:
     name: Fuzz withdrawal_queue_invariants
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
     needs: [changes]
     if: |
       github.event_name == 'schedule' ||
@@ -594,6 +609,8 @@ jobs:
     name: E2E Devnet Validation
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
     needs: [ci-matrix, changes]
     # Trigger e2e-devnet on manual dispatch, weekly schedule, or PRs with 'run-e2e' label or contract modifications
     if: |
@@ -732,6 +749,8 @@ jobs:
   arithmetic-guard:
     name: Arithmetic overflow guard
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 

@@ -194,7 +194,8 @@ The AI agent can move funds between protocols via `rebalance()`, but is constrai
 The contract owner can upgrade the contract code. To protect against malicious or accidental instant code changes, upgrade risk is mitigated via a mandatory two-step timelock mechanism:
 - **Two-Step Timelock**: Upgrades must first be scheduled via `schedule_upgrade(new_wasm_hash)`, initiating a timelock delay before `execute_upgrade()` can be called.
 - **Cancellation Window**: During the timelock window, the owner or security monitoring can invoke `cancel_upgrade()` to abort a compromised or erroneous upgrade proposal.
-- **Owner Multi-Sig Recommended**: For mainnet deployment, owner authority should be held by a multi-sig account.
+- **Owner Multi-Sig Governance**: For mainnet deployment, owner authority must be held by a Stellar native multi-sig account (e.g. 2-of-3 threshold).
+- **Guardian Key Evaluation & Formal Deferral (Issues #607, #922)**: A contract-level second-signature pattern (`DataKey::Guardian` gating `execute_upgrade`) was evaluated in [`docs/GUARDIAN_KEY_DESIGN.md`](docs/GUARDIAN_KEY_DESIGN.md) and formally deferred in favor of native Stellar protocol multi-sig. Native multi-sig protects all owner actions at the ledger level rather than adding bespoke contract logic for upgrades alone.
 
 ### 5. State Rent & TTL Expiry
 
