@@ -11,6 +11,7 @@ import { JaegerExporter } from '@opentelemetry/exporter-jaeger';
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
 import { PgInstrumentation } from '@opentelemetry/instrumentation-pg';
 import { registerInstrumentations } from '@opentelemetry/instrumentation';
+import logger from './logger';
 
 export function initializeTracing(serviceName: string = 'neurowealth-agent') {
   const resource = Resource.default().merge(
@@ -38,7 +39,7 @@ export function initializeTracing(serviceName: string = 'neurowealth-agent') {
     ],
   });
 
-  console.log(`OpenTelemetry tracing initialized for ${serviceName}`);
+  logger.info({ serviceName }, 'OpenTelemetry tracing initialized');
   return trace.getTracer(serviceName);
 }
 

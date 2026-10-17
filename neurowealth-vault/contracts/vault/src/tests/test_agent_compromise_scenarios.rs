@@ -461,10 +461,12 @@ fn test_agent_cannot_set_migration_target() {
         &env,
         &contract_id,
         &agent,
-        "set_migration_target",
-        (target.clone(),).into_val(&env),
+        "schedule_migration_target",
+        (agent.clone(), target.clone()).into_val(&env),
     );
-    let accepted = client.try_set_migration_target(&target).is_ok();
+    let accepted = client
+        .try_schedule_migration_target(&agent, &target)
+        .is_ok();
     env.mock_all_auths();
     assert_err_and_frozen(
         &client,
@@ -472,7 +474,7 @@ fn test_agent_cannot_set_migration_target() {
         &victim,
         &before,
         accepted,
-        "set_migration_target",
+        "schedule_migration_target",
     );
 }
 

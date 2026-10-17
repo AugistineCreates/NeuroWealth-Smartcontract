@@ -7,7 +7,7 @@
 //!
 //! Acceptance criteria covered here:
 //!   1. Success path: withdraws and re-supplies to CurrentProtocol, emits
-//!      `HarvestEvent` with the correct protocol and `amount_harvested`.
+//!      `HarvestEvent` with the correct protocol and `amount_cycled`.
 //!   2. Rejects when the vault is paused (`VaultError::Paused`, #35).
 //!   3. Rejects when the caller is not the agent.
 //!   4. Rejects a negative `min_out` (`VaultError::MinOutMustBeNonNegative`, #16).
@@ -21,7 +21,7 @@
 extern crate std;
 
 use super::utils::*;
-use crate::{HarvestEvent, TOPIC_HARVEST};
+use crate::{HarvestEvent, TOPIC_HARVEST, TOPIC_PROTOCOL_CHANGED};
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Ledger, MockAuth, MockAuthInvoke},
@@ -88,7 +88,7 @@ fn decode_harvest_event(env: &Env) -> HarvestEvent {
 
 /// Harvesting a Blend position withdraws the full deployed amount and
 /// immediately re-supplies it. The vault ends with the same protocol
-/// allocation and emits `HarvestEvent { protocol: "blend", amount_harvested }`.
+/// allocation and emits `HarvestEvent { protocol: "blend", amount_cycled }`.
 #[test]
 fn test_harvest_withdraws_and_resupplies_blend() {
     let env = Env::default();
@@ -107,7 +107,21 @@ fn test_harvest_withdraws_and_resupplies_blend() {
     assert_eq!(blend_client.supplied(&usdc_token), deposit_amount);
     assert_eq!(token_client.balance(&blend_pool), deposit_amount);
 
+    let protocol_events_before =
+        find_events_by_topic(env.events().all(), &env, TOPIC_PROTOCOL_CHANGED).len();
+    let total_assets_before = client.get_total_assets();
     client.harvest(&0_i128);
+    assert_eq!(
+        client.get_total_assets(),
+        total_assets_before,
+        "compounding harvest does not report realized yield to TotalAssets"
+    );
+    let protocol_events_after =
+        find_events_by_topic(env.events().all(), &env, TOPIC_PROTOCOL_CHANGED).len();
+    assert_eq!(
+        protocol_events_after, protocol_events_before,
+        "harvest must not emit transient ProtocolChanged events"
+    );
 
     // Post-harvest: funds must be back in Blend (withdraw + re-supply).
     assert_eq!(
@@ -130,8 +144,8 @@ fn test_harvest_withdraws_and_resupplies_blend() {
     let event = decode_harvest_event(&env);
     assert_eq!(event.protocol, symbol_short!("blend"));
     assert_eq!(
-        event.amount_harvested, deposit_amount,
-        "amount_harvested must equal the withdrawn (and re-supplied) position"
+        event.amount_cycled, deposit_amount,
+        "amount_cycled must equal the amount actually resupplied"
     );
 }
 
@@ -176,7 +190,7 @@ fn test_harvest_withdraws_and_resupplies_dex() {
 
     let event = decode_harvest_event(&env);
     assert_eq!(event.protocol, symbol_short!("dex"));
-    assert_eq!(event.amount_harvested, deposit_amount);
+    assert_eq!(event.amount_cycled, deposit_amount);
 }
 
 /// A successful harvest updates `LastRebalanceLedger` to the current ledger
@@ -201,7 +215,7 @@ fn test_harvest_updates_last_rebalance_ledger() {
 }
 
 /// Harvesting a Blend position that currently holds zero funds still
-/// succeeds and emits `HarvestEvent` with `amount_harvested == 0`. This
+/// succeeds and emits `HarvestEvent` with `amount_cycled == 0`. This
 /// covers the noop-rebalance-then-harvest path (`CurrentProtocol == blend`
 /// but no deployed balance).
 #[test]
@@ -222,7 +236,7 @@ fn test_harvest_zero_position_emits_zero_amount() {
 
     let event = decode_harvest_event(&env);
     assert_eq!(event.protocol, symbol_short!("blend"));
-    assert_eq!(event.amount_harvested, 0_i128);
+    assert_eq!(event.amount_cycled, 0_i128);
 }
 
 // ===========================================================================
@@ -359,7 +373,7 @@ fn test_agent_harvest_with_scoped_auth() {
 
     let event = decode_harvest_event(&env);
     assert_eq!(event.protocol, symbol_short!("blend"));
-    assert_eq!(event.amount_harvested, 10_000_000_i128);
+    assert_eq!(event.amount_cycled, 10_000_000_i128);
 }
 
 // ===========================================================================
@@ -572,11 +586,35 @@ fn test_harvest_succeeds_after_cooldown_elapses() {
 
     let event = decode_harvest_event(&env);
     assert_eq!(event.protocol, symbol_short!("blend"));
-    assert_eq!(event.amount_harvested, deposit_amount);
+    assert_eq!(event.amount_cycled, deposit_amount);
 
     let new_last = client.get_last_rebalance_ledger();
     assert!(
         new_last >= last + interval,
         "LastRebalanceLedger should advance after a successful post-cooldown harvest"
     );
+}
+
+/// Repeated harvests with a fully blocked withdrawal increment the shared
+/// consecutive-failure breaker and pause at its configured threshold.
+#[test]
+fn test_consecutive_failed_harvests_trip_circuit_breaker() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, _usdc_token, blend_pool) =
+        setup_with_deployed_blend(&env, 10_000_000_i128);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let blend_client = MockBlendPoolClient::new(&env, &blend_pool);
+
+    client.set_max_consecutive_failures(&2);
+    blend_client.set_max_withdraw_limit(&-1_i128);
+
+    client.harvest(&0_i128);
+    assert_eq!(client.get_consecutive_failures(), 1);
+    assert!(!client.is_paused());
+
+    client.harvest(&0_i128);
+    assert_eq!(client.get_consecutive_failures(), 2);
+    assert!(client.is_paused());
 }

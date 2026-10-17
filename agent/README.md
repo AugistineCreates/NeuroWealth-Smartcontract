@@ -16,6 +16,34 @@ The NeuroWealth agent is an autonomous background service that continuously moni
 
 ---
 
+## Configuration (#752)
+
+Copy `.env.example` to `.env` and configure the environment:
+
+```bash
+cp .env.example .env
+```
+
+Key environment variables include:
+- `SOROBAN_RPC_URL` / `SOROBAN_NETWORK_PASSPHRASE` / `VAULT_CONTRACT_ID` — Stellar & Soroban RPC endpoint and vault address.
+- `DATABASE_URL` — PostgreSQL connection string for user strategies, rebalances, and ledger cursor.
+- `SOROBAN_SECRET_KEY` — Stellar secret key for signing automated rebalance and compounding transactions.
+- `SOROBAN_PUBLIC_KEY` — optional source account for dry-run simulations when no signing key is configured.
+- `AGENT_EXECUTION_MODE` — required explicit `dry-run` or `live`; dry-run simulates proposed contract calls and never submits them.
+- `PORT` / `METRICS_PORT` — Agent API and metrics server ports.
+- `DB_RETRY_MAX_RETRIES`, `DB_RETRY_BASE_DELAY_MS`, `DB_RETRY_MAX_DELAY_MS`, and
+  `DB_TRANSACTION_DEADLINE_MS` — retry budget and total deadline for transient
+  PostgreSQL failures. Retry counters are exposed at
+  `/api/metrics/database-retries`.
+
+The agent rejects legacy `DRY_RUN` and `LIVE_MODE` flags to avoid mixed-mode
+configuration. Live rebalance submission is idempotent by decision snapshot;
+ambiguous RPC timeouts stay in reconciliation until the transaction hash is
+found finalized or a rejection is confirmed. A rejected decision can only be
+retried with an explicit reason, which is recorded with the new attempt.
+
+---
+
 ## Key Modules
 
 - **Yield Comparison Engine** (`src/yieldComparison.ts`): Aggregates real-time and historical (7d/30d/90d) APYs, calculating risk-adjusted return ratios (Sharpe-like metric) and enforcing the 0.5% minimum improvement threshold.

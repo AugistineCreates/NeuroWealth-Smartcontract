@@ -1,13 +1,18 @@
 import 'dotenv/config';
 import express from 'express';
 import { startEventListener, stopEventListener, server, pool } from './eventListener';
+import { closePool } from './db';
 import { evaluateYield } from './yieldComparison';
 import { runRebalanceCycle } from './userStrategies';
 import healthRouter, { configureHealthChecks } from './health';
 import logger from './logger';
 import { initializeTracing } from './tracing';
 import { submitAutoCompoundTx, submitRebalanceTx } from './sorobanTx';
-import { getCurrentAllocation } from './userStrategies';
+import { createDecisionId } from './rebalanceOperations';
+import { resolveExecutionMode } from './executionMode';
+import { RollupScheduler } from './dataRollup';
+import { WithdrawalKeeperScheduler } from './withdrawalKeeper';
+import { Keypair } from '@stellar/stellar-sdk';
 
 import { ipRateLimiter, userRateLimiter } from './rateLimiter';
 
@@ -23,6 +28,8 @@ app.use(userRateLimiter);
 app.use(healthRouter);
 
 let decisionInterval: ReturnType<typeof setInterval> | null = null;
+const rollupScheduler = new RollupScheduler(pool);
+let withdrawalKeeper: WithdrawalKeeperScheduler | null = null;
 
 /**
  * Invokes the vault contract's `auto_compound(min_out)` function to harvest
@@ -32,18 +39,18 @@ let decisionInterval: ReturnType<typeof setInterval> | null = null;
  * @param minOut - Minimum amount of yield that must be compounded; reverts if
  *                 the available yield is below this threshold.
  */
-async function autoCompound(minOut: number = 0): Promise<void> {
+async function autoCompound(minOut: number = 0, mode: 'live' | 'dry-run'): Promise<void> {
   const vaultAddress = process.env.VAULT_ADDRESS || process.env.VAULT_CONTRACT_ID;
   if (!vaultAddress) {
     throw new Error("VAULT_ADDRESS environment variable is not set");
   }
 
-  console.log(`Auto-compounding yield on vault ${vaultAddress} with min_out=${minOut}`);
+  logger.info({ vaultAddress, minOut }, 'Auto-compounding yield');
 
-  await submitAutoCompoundTx(minOut);
+  await submitAutoCompoundTx(minOut, mode);
 }
 
-function startDecisionLoop() {
+function startDecisionLoop(executionMode: 'live' | 'dry-run') {
   logger.info('Initializing hourly decision loop');
 
   decisionInterval = setInterval(async () => {
@@ -56,20 +63,31 @@ function startDecisionLoop() {
 
       // Each user's strategy comes from users.strategy_preference and the
       // current position from the latest rebalances row (#749).
-      const { usersEvaluated, decisions } = await runRebalanceCycle(pool, evaluateYield);
+      const cycle = await runRebalanceCycle(pool, evaluateYield);
+      const { usersEvaluated, decisions } = cycle;
       const rebalanceNeeded = [...decisions.values()].some((d) => d.shouldRebalance);
+      const cycleSnapshot = {
+        currentAllocation: cycle.currentAllocation,
+        strategySnapshot: cycle.strategySnapshot,
+        decisions: [...decisions.entries()].sort(([a], [b]) => a.localeCompare(b)),
+      };
+      const decisionId = createDecisionId(
+        'hourly-rebalance',
+        new Date().toISOString().slice(0, 13),
+        cycleSnapshot,
+      );
       logger.info(
         { usersEvaluated, strategies: Object.fromEntries(decisions) },
         'Hourly yield evaluation complete',
       );
 
       if (usersEvaluated > 0 && !rebalanceNeeded) {
-        console.log(`Hourly check: Yield is optimal. No action needed.`);
+        logger.info('Hourly check: Yield is optimal; no action needed');
         // Yield is already in the best protocol; compound it for maximum growth
-        await autoCompound(0);
+        await autoCompound(0, executionMode);
       } else if (usersEvaluated > 0 && rebalanceNeeded) {
-        console.log(`Hourly check: Rebalance needed.`);
-        const currentAllocation = await getCurrentAllocation(pool);
+        logger.info('Hourly check: Rebalance needed');
+        const currentAllocation = cycle.currentAllocation;
         
         // Batch rebalances: iterate through decisions and trigger rebalance for target protocols.
         // Since it's a single vault, we just pick the first valid target protocol to rebalance to.
@@ -77,7 +95,11 @@ function startDecisionLoop() {
         
         if (decisionToRebalance?.targetProtocol) {
           logger.info({ targetProtocol: decisionToRebalance.targetProtocol }, 'Submitting batch rebalance transaction');
-          await submitRebalanceTx(decisionToRebalance.targetProtocol, currentAllocation.apy);
+          await submitRebalanceTx(decisionToRebalance.targetProtocol, currentAllocation.apy, {
+            mode: executionMode,
+            decisionId,
+            snapshot: cycleSnapshot,
+          });
         }
       }
     } catch (error) {
@@ -86,47 +108,131 @@ function startDecisionLoop() {
   }, 60 * 60 * 1000);
 }
 
+let isShuttingDown = false;
+
+export async function gracefulShutdown(
+  signal: string,
+  serverInstance?: import('http').Server,
+  options = { timeoutMs: 10000, exitProcess: true }
+): Promise<void> {
+  if (isShuttingDown) {
+    logger.warn(`${signal} received while shutdown already in progress; ignoring duplicate signal`);
+    return;
+  }
+  isShuttingDown = true;
+  logger.info(`${signal} received, initiating graceful shutdown`);
+
+  // Force exit safeguard timer
+  let forceTimer: NodeJS.Timeout | null = null;
+  if (options.exitProcess) {
+    forceTimer = setTimeout(() => {
+      logger.fatal('Graceful shutdown timed out; forcing process exit');
+      process.exit(1);
+    }, options.timeoutMs);
+    forceTimer.unref();
+  }
+
+  // 1. Stop hourly decision loop
+  if (decisionInterval) {
+    clearInterval(decisionInterval);
+    decisionInterval = null;
+    logger.info('Decision loop stopped');
+  }
+
+  // 2. Stop withdrawal queue keeper
+  if (withdrawalKeeper) {
+    withdrawalKeeper.stop();
+    withdrawalKeeper = null;
+    logger.info('Withdrawal keeper stopped');
+  }
+
+  // 3. Stop accepting incoming HTTP connections and drain in-flight requests
+  if (serverInstance) {
+    await new Promise<void>((resolve) => {
+      serverInstance.close((err) => {
+        if (err) {
+          logger.warn({ error: err.message }, 'Error closing HTTP server');
+        } else {
+          logger.info('HTTP server closed');
+        }
+        resolve();
+      });
+    });
+  }
+
+  // 4. Gracefully stop event listener and await completion of in-flight polls
+  try {
+    await stopEventListener();
+  } catch (err) {
+    logger.error({ error: err instanceof Error ? err.message : String(err) }, 'Error stopping event listener');
+  }
+
+  // 5. Drain and close PostgreSQL connection pool
+  try {
+    await closePool();
+  } catch (err) {
+    logger.error({ error: err instanceof Error ? err.message : String(err) }, 'Error closing database pool');
+  }
+
+  if (forceTimer) clearTimeout(forceTimer);
+  logger.info('Graceful shutdown completed successfully');
+
+  if (options.exitProcess) {
+    process.exit(0);
+  }
+}
+
 async function main() {
+  const executionMode = resolveExecutionMode();
   logger.info('Starting NeuroWealth AI Agent');
 
   configureHealthChecks(pool, server);
   await startEventListener();
-  startDecisionLoop();
+  startDecisionLoop(executionMode);
+
+  if (process.env.DATABASE_URL) {
+    rollupScheduler.start();
+  } else {
+    logger.warn('DATABASE_URL is not set; nightly rollup/cleanup job disabled');
+  }
+
+  // Initialize withdrawal queue keeper if vault contract and agent key are configured
+  const vaultContractId = process.env.VAULT_CONTRACT_ID;
+  const agentSecretKey = process.env.SOROBAN_SECRET_KEY;
+  if (vaultContractId && agentSecretKey) {
+    try {
+      const agentKeypair = Keypair.fromSecret(agentSecretKey);
+      withdrawalKeeper = new WithdrawalKeeperScheduler(vaultContractId, agentKeypair);
+      withdrawalKeeper.start();
+      logger.info('Withdrawal queue keeper started');
+    } catch (error) {
+      logger.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to initialize withdrawal keeper');
+    }
+  } else {
+    logger.warn('VAULT_CONTRACT_ID or SOROBAN_SECRET_KEY not set; withdrawal queue keeper disabled');
+  }
 
   const serverInstance = app.listen(PORT, () => {
     logger.info({ port: PORT }, 'Agent HTTP server listening');
   });
 
-  // Graceful shutdown
-  async function shutdown(signal: string) {
-    logger.info(`${signal} received, shutting down`);
-
-    if (decisionInterval) {
-      clearInterval(decisionInterval);
-      decisionInterval = null;
-    }
-
-    stopEventListener();
-
-    serverInstance.close(() => {
-      logger.info('HTTP server closed');
+  process.on('SIGTERM', () => {
+    gracefulShutdown('SIGTERM', serverInstance).catch((err) => {
+      logger.fatal({ error: err instanceof Error ? err.message : String(err) }, 'Shutdown error');
+      process.exit(1);
     });
-
-    try {
-      await pool.end();
-      logger.info('Database pool closed');
-    } catch {
-      // ignore
-    }
-
-    process.exit(0);
-  }
-
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
+  });
+  process.on('SIGINT', () => {
+    gracefulShutdown('SIGINT', serverInstance).catch((err) => {
+      logger.fatal({ error: err instanceof Error ? err.message : String(err) }, 'Shutdown error');
+      process.exit(1);
+    });
+  });
 }
 
-main().catch((err) => {
-  logger.fatal({ error: err.message }, 'Startup failed');
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    logger.fatal({ error: err.message }, 'Startup failed');
+    process.exit(1);
+  });
+}

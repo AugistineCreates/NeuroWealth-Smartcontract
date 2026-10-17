@@ -624,10 +624,9 @@ fn test_integration_blend_withdraw_event_fields_on_protocol_switch() {
     assert!(evt.success, "Withdrawal event must be marked successful");
 }
 
-/// User withdrawal that pulls all funds out of Blend must update
-/// CurrentProtocol to "none".
+/// User withdrawal that pulls all funds out of Blend must not change strategy state.
 #[test]
-fn test_integration_withdraw_all_updates_current_protocol_to_none() {
+fn test_integration_withdraw_all_preserves_current_protocol() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -653,11 +652,11 @@ fn test_integration_withdraw_all_updates_current_protocol_to_none() {
     // Vault should have pulled everything from Blend
     assert_eq!(blend_client.supplied(&usdc_token), 0);
 
-    // CurrentProtocol should be updated to none
+    // User withdrawals do not represent a strategy decision.
     assert_eq!(
         client.get_current_protocol(),
-        symbol_short!("none"),
-        "CurrentProtocol should switch to 'none' when all funds are withdrawn from Blend"
+        symbol_short!("blend"),
+        "CurrentProtocol should remain unchanged when a user drains Blend"
     );
 }
 
@@ -848,6 +847,40 @@ fn test_rebalance_exit_failure_blocks_protocol_transition() {
         symbol_short!("exit_fail"),
         "RebalanceFailedEvent.reason must be 'exit_fail'"
     );
+    assert_eq!(
+        client.get_consecutive_failures(),
+        1,
+        "an incomplete exit must count toward the circuit breaker"
+    );
+}
+
+#[test]
+fn test_consecutive_exit_failures_auto_pause_vault() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let blend_client = MockBlendPoolClient::new(&env, &blend_pool);
+    client.set_blend_pool(&owner, &blend_pool);
+
+    let dex_pool = env.register_contract(None, MockDexPool);
+    client.set_dex_pool(&owner, &dex_pool);
+    let user = Address::generate(&env);
+    mint_and_deposit(&env, &client, &usdc_token, &user, 20_000_000);
+    client.rebalance(&symbol_short!("blend"), &700, &0);
+
+    client.set_max_consecutive_failures(&2);
+    blend_client.set_max_withdraw_limit(&1_000_000);
+
+    client.rebalance(&symbol_short!("dex"), &700, &0);
+    assert_eq!(client.get_consecutive_failures(), 1);
+    assert!(!client.is_paused());
+
+    client.rebalance(&symbol_short!("dex"), &700, &0);
+    assert_eq!(client.get_consecutive_failures(), 2);
+    assert!(client.is_paused());
 }
 
 /// When the vault is in Blend and the agent calls rebalance("none") but the
@@ -1000,10 +1033,9 @@ fn test_protocol_changed_event_emitted_from_supply_path() {
     assert_eq!(evt.new_protocol, symbol_short!("blend"));
 }
 
-/// ProtocolChangedEvent carries the correct old_protocol when transitioning
-/// from blend → none via a user's `withdraw_all` (which drains Blend fully).
+/// A user's `withdraw_all` does not emit a strategy transition when it drains Blend.
 #[test]
-fn test_protocol_changed_event_on_user_withdraw_draining_blend() {
+fn test_protocol_changed_event_not_emitted_on_user_withdraw_draining_blend() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -1023,21 +1055,16 @@ fn test_protocol_changed_event_on_user_withdraw_draining_blend() {
     let events_before_wd = find_events_by_topic(env.events().all(), &env, TOPIC_PROTOCOL_CHANGED);
     assert_eq!(events_before_wd.len(), 1);
 
-    // User drains the vault — Blend balance hits 0, set_current_protocol("none") fires
+    // User drains the vault without changing the strategy protocol.
     client.withdraw_all(&user);
 
     let events_after_wd = find_events_by_topic(env.events().all(), &env, TOPIC_PROTOCOL_CHANGED);
     assert_eq!(
         events_after_wd.len(),
-        2,
-        "Second ProtocolChangedEvent must fire when withdraw_all empties Blend"
+        1,
+        "withdraw_all must not emit a ProtocolChangedEvent"
     );
-
-    let (_, _, data) = &events_after_wd[1];
-    let evt =
-        ProtocolChangedEvent::try_from_val(&env, data).expect("Should be ProtocolChangedEvent");
-    assert_eq!(evt.old_protocol, symbol_short!("blend"));
-    assert_eq!(evt.new_protocol, symbol_short!("none"));
+    assert_eq!(client.get_current_protocol(), symbol_short!("blend"));
 }
 
 // ============================================================================

@@ -4,11 +4,61 @@ import {
   signTransaction as signFreighterTx,
   getNetworkDetails
 } from '@stellar/freighter-api';
+import { getBrowserTestHarness } from './browserTestHarness';
 
 export interface FreighterWalletState {
   isConnected: boolean;
   publicKey: string | null;
   error: string | null;
+}
+
+/**
+ * Wallet-layer failure classes. These are normal, recoverable states that must not be
+ * conflated with an on-chain transaction failure.
+ */
+export type WalletErrorKind = 'user_rejected' | 'wrong_network' | 'wallet_disconnected' | 'unknown';
+
+export class WalletSigningError extends Error {
+  readonly kind: WalletErrorKind;
+
+  constructor(kind: WalletErrorKind, message: string) {
+    super(message);
+    this.name = 'WalletSigningError';
+    this.kind = kind;
+  }
+}
+
+/**
+ * Classifies an error raised by the Freighter extension (or our own pre-flight checks)
+ * into one of a small set of recoverable wallet-error classes, based on the wording
+ * Freighter is known to use for each case.
+ */
+export function classifyWalletError(err: unknown): WalletErrorKind {
+  const message = err instanceof Error ? err.message : String(err ?? '');
+  const normalized = message.toLowerCase();
+
+  if (normalized.includes('wrong network') || normalized.includes('network passphrase')) {
+    return 'wrong_network';
+  }
+  if (
+    normalized.includes('declin') ||
+    normalized.includes('reject') ||
+    normalized.includes('denied') ||
+    normalized.includes('cancel')
+  ) {
+    return 'user_rejected';
+  }
+  if (
+    normalized.includes('not connected') ||
+    normalized.includes('not installed') ||
+    normalized.includes('not allowed') ||
+    normalized.includes('no public key') ||
+    normalized.includes('disconnected') ||
+    normalized.includes('permission')
+  ) {
+    return 'wallet_disconnected';
+  }
+  return 'unknown';
 }
 
 /**
@@ -27,6 +77,9 @@ export async function isFreighterInstalled(): Promise<boolean> {
  * Non-custodial signing model - private keys never enter web app.
  */
 export async function connectFreighterWallet(): Promise<string | null> {
+  const testHarness = getBrowserTestHarness();
+  if (testHarness) return testHarness.connectWallet();
+
   try {
     const installed = await isFreighterInstalled();
     if (!installed) {
@@ -45,26 +98,35 @@ export async function connectFreighterWallet(): Promise<string | null> {
 
 /**
  * Signs a XDR transaction string using Freighter extension.
+ *
+ * On failure this rejects with a `WalletSigningError` carrying a classified `kind`
+ * (user rejection, wrong network, or a disconnected wallet) so callers can render
+ * recovery guidance appropriate to each case instead of a generic failure.
  */
-export async function signWithFreighter(xdr: string, networkPassphrase?: string): Promise<string | null> {
+export async function signWithFreighter(xdr: string, networkPassphrase?: string): Promise<string> {
   try {
     const requiredPassphrase = networkPassphrase || process.env.NEXT_PUBLIC_SOROBAN_NETWORK_PASSPHRASE;
-    
+
     if (!requiredPassphrase) {
       throw new Error('Network passphrase is not configured in the environment.');
     }
 
-    const networkDetails = await getNetworkDetails();
+    const testHarness = getBrowserTestHarness();
+    const networkDetails = testHarness
+      ? await testHarness.getNetworkDetails()
+      : await getNetworkDetails();
     if (networkDetails.networkPassphrase !== requiredPassphrase) {
       throw new Error(`Freighter is connected to the wrong network. Expected network passphrase: ${requiredPassphrase}`);
     }
 
-    const signedXdr = await signFreighterTx(xdr, {
-      networkPassphrase: requiredPassphrase
-    });
+    const signedXdr = testHarness
+      ? await testHarness.signTransaction(xdr, requiredPassphrase)
+      : await signFreighterTx(xdr, { networkPassphrase: requiredPassphrase });
     return signedXdr;
   } catch (err) {
-    console.error('User rejected or failed transaction signing:', err);
-    return null;
+    console.error('Wallet signing failed:', err);
+    const kind = classifyWalletError(err);
+    const message = err instanceof Error ? err.message : 'Failed to sign transaction with Freighter.';
+    throw new WalletSigningError(kind, message);
   }
 }

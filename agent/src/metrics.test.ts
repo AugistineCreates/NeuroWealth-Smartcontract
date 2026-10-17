@@ -178,6 +178,17 @@ describe('Metrics API (Issue #652)', () => {
     const body = (await res.json()) as { alerts: unknown[] };
     assert.ok(Array.isArray(body.alerts));
   });
+
+  it('serves database transaction retry counters', async () => {
+    const addr = server!.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+    const res = await fetch(`http://127.0.0.1:${port}/api/metrics/database-retries`);
+    assert.strictEqual(res.status, 200);
+    const body = await res.json() as { attempts: number; retries: number; recovered: number };
+    assert.strictEqual(typeof body.attempts, 'number');
+    assert.strictEqual(typeof body.retries, 'number');
+    assert.strictEqual(typeof body.recovered, 'number');
+  });
 });
 
 interface MetricsSnapshotShape {

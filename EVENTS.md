@@ -163,14 +163,16 @@ pub struct RebalanceFailedEvent {
 ### 4c. HarvestEvent
 **Topic:** `"harvest"` (`TOPIC_HARVEST`)
 
-Emitted when the AI agent compounds accrued yield via `harvest()`. The
-function withdraws from the active protocol and immediately re-supplies,
-so the vault balance returns to the same position with compounded yield.
+Emitted when the AI agent performs a compounding round-trip via `harvest()`.
+The function withdraws the active position and re-supplies it according to the
+active protocol or stored multi-protocol allocation. Harvest does not update
+`TotalAssets`; the event reports the amount actually resupplied, not yield
+realized or the full amount withdrawn.
 
 ```rust
 pub struct HarvestEvent {
-    pub protocol: Symbol,       // The protocol harvested from ("blend" or "dex")
-    pub amount_harvested: i128, // Amount withdrawn and re-deposited
+    pub protocol: Symbol,     // The protocol harvested from ("blend", "dex", or "multi")
+    pub amount_cycled: i128,  // Amount actually resupplied; not a yield amount
 }
 ```
 
@@ -331,8 +333,50 @@ pub struct ApprovalTtlUpdatedEvent {
 }
 ```
 
-### 8g. MaxConsecutiveFailuresUpdatedEvent
-**Topic:** `"maxf_upd"` (`TOPIC_MAX_FAILURES_UPDATED`)
+### 8f-a. ProtocolApprovalScheduledEvent
+**Topic:** `"ttl_sch"` (`TOPIC_APPROVAL_TTL_SCHEDULED`)
+
+Emitted alongside `ApprovalTtlUpdatedEvent` every time the shared approval TTL
+is persisted, so operators learn when the current protocol approval will expire
+**before** a rebalance fails because of a lapsed approval (Issue #847).
+
+Publishing the event is side-effect free: it never extends or renews an
+approval. The only write the call performs is the `ApprovalTtl` update itself.
+
+```rust
+pub struct ProtocolApprovalScheduledEvent {
+    pub protocol: Symbol,             // "blend" | "dex" | "both"
+    pub current_ledger: u32,          // Ledger of the emitting call
+    pub approval_ttl: u32,            // Persisted TTL, == get_approval_ttl()
+    pub expiry_ledger: u32,           // current_ledger + approval_ttl
+    pub available_window: u32,        // expiry_ledger - current_ledger
+    pub lead_time: u32,               // Renewal lead time in ledgers (5,000 ≈ 7 h)
+    pub renewal_deadline_ledger: u32, // expiry_ledger - lead_time
+}
+```
+
+**How consumers calculate the renewal lead time.** Nothing has to be replayed
+from transaction history - the payload already contains the schedule:
+
+```text
+available_window        = expiry_ledger - current_ledger
+renewal_deadline_ledger = expiry_ledger - lead_time
+```
+
+Submit the renewal transaction at or before `renewal_deadline_ledger` so the
+approval is refreshed while it is still live. When the configured TTL is
+shorter than the lead time (the 1,000-ledger minimum is), the contract reports
+the whole window as `lead_time` and sets `renewal_deadline_ledger` to the
+current ledger - i.e. renew immediately.
+
+`expiry_ledger` is computed with the same
+`ledger().sequence() + approval_ttl` expression the Blend and DEX approve
+paths use, so it always matches the persisted approval state exactly.
+`protocol` is `both` when set through `set_approval_ttl` (the shared TTL covers
+every protocol approval) and `blend` when set through the legacy
+`set_blend_approval_ttl`.
+
+### 8g. MaxConsecutiveFailuresUpdatedEvent**Topic:** `"maxf_upd"` (`TOPIC_MAX_FAILURES_UPDATED`)
 
 Emitted when the owner changes the circuit-breaker threshold via
 `set_max_consecutive_failures` (Issue #591 — this setter previously mutated
@@ -612,7 +656,7 @@ calls in their body.
 | `set_deposit_limits`             | ✅         | `DepositLimitsUpdatedEvent` (`dep_lim`)                                |
 | `set_rebalance_cooldown`         | ✅         | `RebalanceCooldownUpdatedEvent` (`reb_cd`)                             |
 | `set_max_consecutive_failures`   | ✅ **new** | `MaxConsecutiveFailuresUpdatedEvent` (`maxf_upd`) — added by #591      |
-| `set_approval_ttl`               | ✅         | `ApprovalTtlUpdatedEvent` (`ttl_upd`)                                  |
+| `set_approval_ttl`               | ✅         | `ApprovalTtlUpdatedEvent` (`ttl_upd`) + `ProtocolApprovalScheduledEvent` (`ttl_sch`) |
 | `set_blend_approval_ttl` (legacy)| ✅ **new** | `ApprovalTtlUpdatedEvent` (`ttl_upd`), shared with above — added by #591 |
 | `set_user_strategy`              | ✅         | `UserStrategyUpdatedEvent` (`usr_strat`)                               |
 | `update_agent`                   | ✅         | `AgentUpdateProposedEvent` (`agt_prop`)                                |
@@ -626,6 +670,7 @@ calls in their body.
 | `schedule_upgrade`               | ✅         | `UpgradeScheduledEvent` (`upg_sched`)                                  |
 | `execute_upgrade`                | ✅         | `UpgradedEvent` (`upgraded`)                                           |
 | `cancel_upgrade`                 | ✅         | `UpgradeCancelledEvent` (`upg_cncl`)                                   |
+| `set_queue_config`               | ✅         | `QueueConfigUpdatedEvent` (`wq_cfg`)                                   |
 
 Two gaps were found and closed in #591 (marked **new** above):
 `set_max_consecutive_failures` and `set_blend_approval_ttl` mutated
@@ -856,3 +901,103 @@ Correlate the event with the failed transaction's contract error because the
 over-limit operation is reverted and event visibility for a failed transaction
 depends on the ledger/RPC surface.
 
+## Withdrawal Queue Events (#757)
+
+These events cover the lifecycle of asynchronous withdrawal queue requests, queue configuration, and request processing.
+
+### `WithdrawalQueuedEvent` (`wq_add`)
+
+**Topic:** `"wq_add"` (`TOPIC_WITHDRAWAL_QUEUED`)
+
+Emitted when a user submits an asynchronous withdrawal request via `queue_withdrawal`.
+
+```rust
+#[contracttype]
+pub struct WithdrawalQueuedEvent {
+    pub request_id: u32,   // Auto-incrementing request ID
+    pub user: Address,      // User who queued the withdrawal
+    pub amount: i128,       // Amount requested in USDC raw units (7 decimals)
+    pub timestamp: u64,     // Unix timestamp when the request was queued
+}
+```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `request_id` | `u32` | Sequential request ID assigned to this withdrawal request |
+| `user` | `Address` | Address of the account requesting the withdrawal |
+| `amount` | `i128` | Amount requested in base USDC units (7 decimals) |
+| `timestamp` | `u64` | Ledger timestamp when the request was recorded |
+
+**Usage:**
+- Off-chain AI agent monitors `wq_add` events to prioritize pool exits and schedule queue fulfillments.
+- Frontend tracks pending queued withdrawals for user dashboard display.
+- Indexers update queue length and pending redemption metrics.
+
+### `WithdrawalCancelledEvent` (`wq_cancel`)
+
+**Topic:** `"wq_cancel"` (`TOPIC_WITHDRAWAL_CANCELLED`)
+
+Emitted when a user cancels their pending withdrawal request before fulfillment via `cancel_withdrawal_request`.
+
+```rust
+#[contracttype]
+pub struct WithdrawalCancelledEvent {
+    pub request_id: u32,   // The cancelled request ID
+    pub user: Address,      // User who cancelled the request
+}
+```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `request_id` | `u32` | The ID of the request that was cancelled |
+| `user` | `Address` | Address of the user who initiated and cancelled the request |
+
+**Usage:**
+- Frontend removes the request from the pending queue view.
+- AI agent adjusts pending liquidity requirements.
+
+### `WithdrawalFulfilledEvent` (`wq_done`)
+
+**Topic:** `"wq_done"` (`TOPIC_WITHDRAWAL_FULFILLED`)
+
+Emitted for each request fulfilled during `process_withdrawal_queue`, after underlying USDC has been transferred and vault shares burned.
+
+```rust
+#[contracttype]
+pub struct WithdrawalFulfilledEvent {
+    pub request_id: u32,   // The fulfilled request ID
+    pub user: Address,      // User whose request was fulfilled
+    pub amount: i128,       // Amount actually withdrawn in USDC raw units (7 decimals)
+}
+```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `request_id` | `u32` | Request ID that has been fulfilled and removed from queue |
+| `user` | `Address` | Recipient user address |
+| `amount` | `i128` | Actual USDC amount delivered to the user |
+
+**Usage:**
+- Real-time notification services notify users that their queued withdrawal is complete.
+- Off-chain accounting synchronizes processed requests.
+
+### `QueueConfigUpdatedEvent` (`wq_cfg`)
+
+**Topic:** `"wq_cfg"` (`TOPIC_QUEUE_CONFIG_UPDATED`)
+
+Emitted when the contract owner updates the withdrawal queue capacity and request TTL via `set_queue_config`.
+
+```rust
+#[contracttype]
+pub struct QueueConfigUpdatedEvent {
+    pub new_max_size: u32,  // New max queue size
+    pub new_ttl: u64,       // New TTL in seconds
+    pub owner: Address,     // Owner who made the change
+}
+```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `new_max_size` | `u32` | Maximum number of pending requests the queue can hold |
+| `new_ttl` | `u64` | Expiration time-to-live in seconds before an unfulfilled request expires |
+| `owner` | `Address` | Address of the admin who applied the new configuration |

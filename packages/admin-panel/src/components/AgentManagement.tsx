@@ -68,12 +68,8 @@ export function AgentManagement({
     setTxHash(null);
 
     try {
-      const result = await client.update_agent(
-        signer,
-        signer.publicKey(),
-        newAgent,
-      );
-      setTxHash(result.hash);
+      const result = await client.update_agent(signer, newAgent);
+      setTxHash(result?.hash ?? null);
       setShowUpdateConfirm(false);
 
       // Fetch updated info
@@ -95,17 +91,18 @@ export function AgentManagement({
     setTxHash(null);
 
     try {
-      const result = await client.confirm_agent_update(
-        signer,
-        signer.publicKey(),
-      );
-      setTxHash(result.hash);
+      const result = await client.confirm_agent_update(signer);
+      setTxHash(result?.hash ?? null);
 
       // Poll for confirmation
       const server = getSorobanServer(network);
+      const txHash = result?.hash;
+      if (!txHash) {
+        throw new Error("Transaction hash missing");
+      }
       for (let i = 0; i < 60; i++) {
         try {
-          const tx = await server.getTransaction(result.hash);
+          const tx = await server.getTransaction(txHash);
           if (tx.status === "SUCCESS") break;
         } catch {
           // Not confirmed yet
@@ -130,17 +127,18 @@ export function AgentManagement({
     setTxHash(null);
 
     try {
-      const result = await client.cancel_agent_update(
-        signer,
-        signer.publicKey(),
-      );
-      setTxHash(result.hash);
+      const result = await client.cancel_agent_update(signer);
+      setTxHash(result?.hash ?? null);
 
       // Poll for confirmation
       const server = getSorobanServer(network);
+      const txHash = result?.hash;
+      if (!txHash) {
+        throw new Error("Transaction hash missing");
+      }
       for (let i = 0; i < 60; i++) {
         try {
-          const tx = await server.getTransaction(result.hash);
+          const tx = await server.getTransaction(txHash);
           if (tx.status === "SUCCESS") break;
         } catch {
           // Not confirmed yet

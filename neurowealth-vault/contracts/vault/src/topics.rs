@@ -91,7 +91,11 @@ pub const TOPIC_UPGRADE_CANCELLED: Symbol = symbol_short!("upg_cncl");
 pub const TOPIC_REBALANCE_COOLDOWN_UPDATED: Symbol = symbol_short!("reb_cd");
 /// Topic for `ApprovalTtlUpdatedEvent`, published by `set_approval_ttl`.
 pub const TOPIC_APPROVAL_TTL_UPDATED: Symbol = symbol_short!("ttl_upd");
-/// Topic for `HarvestEvent`, published when accrued yield is harvested and compounded.
+/// Topic for `ProtocolApprovalScheduledEvent`, published by `set_approval_ttl`
+/// and the legacy `set_blend_approval_ttl` so operators learn the approval
+/// expiry ledger without reading transaction history (#847).
+pub const TOPIC_APPROVAL_TTL_SCHEDULED: Symbol = symbol_short!("ttl_sch");
+/// Topic for `HarvestEvent`, published when a protocol position is cycled by `harvest`.
 pub const TOPIC_HARVEST: Symbol = symbol_short!("harvest");
 /// Topic for `EmergencyHarvestEvent`, published when the owner triggers an
 /// emergency harvest fallback during an agent-key outage or rotation.
@@ -102,6 +106,10 @@ pub const TOPIC_COMPOUND: Symbol = symbol_short!("compound");
 pub const TOPIC_MIGRATE: Symbol = symbol_short!("migrate");
 /// Topic for `MigrationTargetUpdatedEvent`, published when the owner sets/updates migration target.
 pub const TOPIC_MIGRATION_TARGET_UPDATED: Symbol = symbol_short!("mig_tgt");
+/// Topic for `MigrationTargetScheduledEvent`, published by `schedule_migration_target` (#969).
+pub const TOPIC_MIGRATION_TARGET_SCHEDULED: Symbol = symbol_short!("mig_sched");
+/// Topic for `MigrationTargetCancelledEvent`, published by `cancel_migration_target` (#969).
+pub const TOPIC_MIGRATION_TARGET_CANCELLED: Symbol = symbol_short!("mig_cncl");
 /// Topic for `MigrationPausedEvent`, published when migration is paused/unpaused.
 pub const TOPIC_MIGRATION_PAUSED: Symbol = symbol_short!("mig_pse");
 /// Topic 0 for `SharesLockedEvent`; topic 1 is the user's `Address`.
@@ -129,7 +137,6 @@ pub const TOPIC_PROTOCOL_APY_UPDATED: Symbol = symbol_short!("apy_upd");
 /// `set_max_consecutive_failures` when the circuit-breaker threshold changes.
 pub const TOPIC_MAX_FAILURES_UPDATED: Symbol = symbol_short!("maxf_upd");
 
-
 /// Topic for `InsuranceFundUpdatedEvent`.
 pub const TOPIC_INSURANCE_FUND_UPDATED: Symbol = symbol_short!("ins_fund");
 
@@ -139,10 +146,6 @@ pub const TOPIC_RATE_LIMIT_CONFIG_UPDATED: Symbol = symbol_short!("rate_cfg");
 pub const TOPIC_BATCH_SIZE_LIMIT_UPDATED: Symbol = symbol_short!("batch_lim");
 /// Topic for `RateLimitExceededEvent`, published before a rate-limited call is rejected.
 pub const TOPIC_RATE_LIMIT_HIT: Symbol = symbol_short!("rate_hit");
-
-/// Topic for `MaxConsecutiveFailuresUpdatedEvent`, published by
-/// `set_max_consecutive_failures` when the circuit-breaker threshold changes.
-pub const TOPIC_MAX_FAILURES_UPDATED: Symbol = symbol_short!("maxf_upd");
 
 // ============================================================================
 // Multi-protocol adapter events (#656)

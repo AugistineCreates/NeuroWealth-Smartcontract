@@ -85,7 +85,7 @@ To contribute to the smart contracts, you'll need the following installed:
   cargo install --locked stellar-cli --version "$STELLAR_VERSION" --features opt
   ```
   Using a different version than the pin is the most common cause of CI failures locally.
-- **Node.js & npm**: For agent and frontend development (LTS version recommended).
+- **Node.js & npm**: For package workspace, agent, frontend, and WhatsApp development (LTS version recommended).
 
 ### Pre-Commit Secret Scanning Hook
 
@@ -126,8 +126,22 @@ cargo test
 
 For frontend or agent changes, run:
 ```bash
+cd <package-directory>
+npm ci
 npm test
 ```
+
+For the npm package workspaces (`packages/*`), run from the repository root:
+
+```bash
+npm ci
+npm test
+```
+
+This runs every package workspace test script. The admin panel currently has
+no tests; its test command prints an explicit no-tests-yet gate. The
+`agent/`, `frontend/`, and `whatsapp/` projects are not root npm workspaces, so
+run their tests from their own directories.
 
 > **Touching share accounting?** If your change lands anywhere under
 > `neurowealth-vault/contracts/vault/src/`, CI also runs the deposit/withdraw
@@ -322,6 +336,20 @@ Occasionally a state-changing function is intentionally permissionless (for exam
 - **Via environment variable**: set `AUTH_GATE_NA_FUNCTIONS=fn_name` (colon-separated for multiple names) when invoking the script locally or in a custom workflow step.
 
 Both methods cause the gate to skip that function. Reserve this escape hatch for functions that genuinely have no meaningful access-control boundary — all owner-only, agent-only, and user-scoped functions must have a SECURITY.md row.
+
+### Soroban Pitfall Lints
+
+`scripts/check-soroban-lints.py` (run in the **Security Documentation Audit** CI job) parses the production vault sources and fails on three Soroban pitfalls:
+
+| Rule | Flags |
+|------|-------|
+| `unwrap-storage-get` | `env.storage().<tier>().get(..).unwrap()` / `.expect(..)` — a missing key aborts with an opaque host panic instead of a typed `VaultError`. Use `.unwrap_or(..)` or `.unwrap_or_else(\|\| panic_with_error!(..))`. |
+| `missing-require-initialized` | A `#[contractimpl]` `pub fn` that never reaches `require_initialized` (directly or through helpers like `require_is_owner`). |
+| `missing-require-auth` | A `#[contractimpl]` `pub fn` that writes storage or moves tokens (directly or through helpers) without reaching `require_auth` / `require_auth_for_args`. |
+
+Run it locally with `python3 scripts/check-soroban-lints.py`. To suppress a finding, either add `// soroban-lint: allow(<rule>) <reason>` on the offending line (or directly above the `pub fn`), or add the function with a justification to [`scripts/soroban-lints-allow.json`](scripts/soroban-lints-allow.json).
+
+Pre-existing storage unwraps are tracked as a per-function ratchet baseline in the same file: adding a new one fails CI, and removing one asks you to lower the count via `python3 scripts/check-soroban-lints.py --update-baseline`. Never raise a baseline count to make CI pass.
 
 ### Dependency Audit & Advisory Exceptions
 

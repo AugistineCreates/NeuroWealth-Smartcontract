@@ -9,31 +9,49 @@ import { createLedgerCursorStore, EventPosition, initialPosition, isStalePositio
 import { decodeVaultTransfer, vaultEventType } from './vaultEventPayload';
 import { DEFAULT_STRATEGY, getCurrentAllocation, getUserStrategy } from './userStrategies';
 import { submitRebalanceTx } from './sorobanTx';
+import { createDecisionId } from './rebalanceOperations';
+
+import { EventCircuitBreaker, CircuitBreakerStatus } from './eventCircuitBreaker';
 
 export { pool };
 
 const rpcUrl = process.env.SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org';
 export const server = new rpc.Server(rpcUrl);
 
-const VAULT_CONTRACT_ID = process.env.VAULT_CONTRACT_ID || '';
 const EVENTS_PAGE_LIMIT = 100;
 
 let eventInterval: ReturnType<typeof setInterval> | null = null;
+let activePollingPromise: Promise<void> | null = null;
+let isStopping = false;
 
-export function stopEventListener() {
+export async function stopEventListener(timeoutMs = 5000): Promise<void> {
+  isStopping = true;
   if (eventInterval) {
     clearInterval(eventInterval);
     eventInterval = null;
-    logger.info('Event listener stopped');
   }
+  if (activePollingPromise) {
+    logger.info({ timeoutMs }, 'Waiting for in-flight event polling to complete');
+    let timer: NodeJS.Timeout | null = null;
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+    });
+    try {
+      await Promise.race([activePollingPromise, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  logger.info('Event listener stopped');
 }
 
 /**
  * Listens for on-chain deposit and withdraw events from the vault contract.
  * Detects new deposits within 5 seconds and triggers yield deployment.
+ * Protects RPC with exponential backoff and circuit-breaking on sustained failures.
  */
 export async function startEventListener() {
-  if (!VAULT_CONTRACT_ID) {
+  if (!process.env.VAULT_CONTRACT_ID) {
     logger.warn('VAULT_CONTRACT_ID is not set. Event listener requires a contract ID to monitor.');
     return;
   }
@@ -57,72 +75,119 @@ export async function startEventListener() {
       logger.info({ startLedger: startSequence }, 'Starting event listener from initial ledger (no saved cursor)');
     }
 
-    const filters: rpc.Api.EventFilter[] = [{ type: 'contract', contractIds: [VAULT_CONTRACT_ID] }];
+    const filters: rpc.Api.EventFilter[] = [{ type: 'contract', contractIds: [process.env.VAULT_CONTRACT_ID!] }];
     let polling = false;
+    isStopping = false;
 
-    eventInterval = setInterval(async () => {
-      // A slow poll must not overlap the next tick, or the same page would be
-      // processed twice.
-      if (polling) return;
-      polling = true;
-      try {
-        let hasMorePages = true;
-        let pageCount = 0;
-        const MAX_PAGES = 10; // Cap to prevent infinite loops in one tick
+    // #902: declare pollTimer and eventCircuitBreaker that were missing
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+    const eventCircuitBreaker = new EventCircuitBreaker();
 
-        while (hasMorePages && pageCount < MAX_PAGES) {
-          let response: rpc.Api.GetEventsResponse;
-          try {
-            const request: rpc.Api.GetEventsRequest = 'cursor' in position
-              ? { filters, cursor: position.cursor, limit: EVENTS_PAGE_LIMIT }
-              : { filters, startLedger: position.startLedger, limit: EVENTS_PAGE_LIMIT };
-            response = await withRetry(() => server.getEvents(request), 'getEvents');
-          } catch (error) {
-            if ('cursor' in position && isStalePositionError(error)) {
-              const latest = await withRetry(() => server.getLatestLedger(), 'getLatestLedger');
-              logger.error(
-                { pagingToken: position.cursor, resumeLedger: latest.sequence, error: error instanceof Error ? error.message : error },
-                'Saved event cursor is outside the RPC retention window; events in the gap were MISSED and need manual backfill',
-              );
-              position = { startLedger: latest.sequence };
-              break; // Break the while loop to retry from tip on the next tick
-            }
-            throw error;
-          }
+    const scheduleNextTick = (delayMs: number) => {
+      if (isStopping) return;
+      if (pollTimer) clearTimeout(pollTimer);
+      pollTimer = setTimeout(() => {
+        void pollTick();
+      }, delayMs);
+    };
 
-          for (const event of response.events) {
-            const eventType = vaultEventType(event.topic);
+    // #902: pollTick is self-scheduling via scheduleNextTick (no setInterval).
+    // The old setInterval was removed; all scheduling now flows through
+    // scheduleNextTick so the circuit-breaker delay is respected between ticks.
+    const pollTick = async () => {
+      if (isStopping || polling) return;
 
-            if (eventType) {
-              await handleVaultEvent(eventType, event);
-            }
-
-            // Event ids are paging tokens: persist after each event so a
-            // restart resumes right after the last handled one.
-            position = { cursor: event.id };
-            await cursor.save(event.id, event.ledger);
-          }
-
-          // The page cursor also covers the scanned range with no matching
-          // events, so idle periods are not rescanned after a restart.
-          if (response.cursor) {
-            position = { cursor: response.cursor };
-            await cursor.save(response.cursor, response.latestLedger);
-          }
-
-          if (response.events.length < EVENTS_PAGE_LIMIT) {
-            hasMorePages = false;
-          } else {
-            pageCount++;
-          }
-        }
-      } catch (error) {
-        logger.error({ error: error instanceof Error ? error.message : error }, 'Error polling Soroban events');
-      } finally {
-        polling = false;
+      if (!eventCircuitBreaker.canExecute()) {
+        const backoffDelay = eventCircuitBreaker.getNextDelayMs();
+        logger.warn(
+          { state: eventCircuitBreaker.getState(), nextDelayMs: backoffDelay },
+          'Soroban event polling skipped: circuit breaker open/in cooldown',
+        );
+        scheduleNextTick(backoffDelay);
+        return;
       }
-    }, 5000);
 
+      polling = true;
+
+      activePollingPromise = (async () => {
+        try {
+          let hasMorePages = true;
+          let pageCount = 0;
+          const MAX_PAGES = 10; // Cap to prevent infinite loops in one tick
+
+          while (hasMorePages && pageCount < MAX_PAGES && !isStopping) {
+            let response: rpc.Api.GetEventsResponse;
+            try {
+              const request: rpc.Api.GetEventsRequest = 'cursor' in position
+                ? { filters, cursor: position.cursor, limit: EVENTS_PAGE_LIMIT }
+                : { filters, startLedger: position.startLedger, limit: EVENTS_PAGE_LIMIT };
+              response = await withRetry(() => server.getEvents(request), 'getEvents');
+            } catch (error) {
+              if ('cursor' in position && isStalePositionError(error)) {
+                const latest = await withRetry(() => server.getLatestLedger(), 'getLatestLedger');
+                logger.error(
+                  { pagingToken: position.cursor, resumeLedger: latest.sequence, error: error instanceof Error ? error.message : error },
+                  'Saved event cursor is outside the RPC retention window; events in the gap were MISSED and need manual backfill',
+                );
+                position = { startLedger: latest.sequence };
+                break; // Break the while loop to retry from tip on the next tick
+              }
+              throw error;
+            }
+
+            for (const event of response.events) {
+              if (isStopping) break;
+              const eventType = vaultEventType(event.topic);
+
+              if (eventType) {
+                await handleVaultEvent(eventType, event);
+              }
+
+              // Event ids are paging tokens: persist after each event so a
+              // restart resumes right after the last handled one.
+              position = { cursor: event.id };
+              await cursor.save(event.id, event.ledger);
+            }
+
+            // The page cursor also covers the scanned range with no matching
+            // events, so idle periods are not rescanned after a restart.
+            if (response.cursor && !isStopping) {
+              position = { cursor: response.cursor };
+              await cursor.save(response.cursor, response.latestLedger);
+            }
+
+            if (response.events.length < EVENTS_PAGE_LIMIT) {
+              hasMorePages = false;
+            } else {
+              pageCount++;
+            }
+          }
+
+          // Successfully completed poll cycle
+          eventCircuitBreaker.recordSuccess();
+          scheduleNextTick(eventCircuitBreaker.getNextDelayMs());
+        } catch (error) {
+          eventCircuitBreaker.recordFailure(error);
+          const nextDelay = eventCircuitBreaker.getNextDelayMs();
+          logger.error(
+            {
+              error: error instanceof Error ? error.message : error,
+              nextPollInMs: nextDelay,
+              circuitState: eventCircuitBreaker.getState(),
+            },
+            'Error polling Soroban events; backing off',
+          );
+          scheduleNextTick(nextDelay);
+        } finally {
+          polling = false;
+          activePollingPromise = null;
+        }
+      })();
+
+      await activePollingPromise;
+    };
+
+    scheduleNextTick(eventCircuitBreaker.getNextDelayMs());
   } catch (error) {
     logger.error({ error: error instanceof Error ? error.message : error }, 'Failed to initialize event listener');
   }
@@ -160,7 +225,17 @@ async function handleVaultEvent(eventType: AlertEventType, event: rpc.Api.EventR
       if (decision.shouldRebalance && decision.targetProtocol) {
         logger.info({ targetProtocol: decision.targetProtocol, userStrategy }, 'Rebalance needed');
         const expectedApy = currentApy; // use current evaluated APY or fetch it
-        await submitRebalanceTx(decision.targetProtocol, expectedApy);
+        const snapshot = {
+          eventId: event.id,
+          strategy: userStrategy,
+          currentProtocol,
+          currentApy,
+          decision,
+        };
+        await submitRebalanceTx(decision.targetProtocol, expectedApy, {
+          decisionId: createDecisionId('deposit-event', event.id, snapshot),
+          snapshot,
+        });
       }
     } catch (error) {
       logger.error({ error: error instanceof Error ? error.message : error, userStrategy }, 'Yield evaluation failed for deposit');

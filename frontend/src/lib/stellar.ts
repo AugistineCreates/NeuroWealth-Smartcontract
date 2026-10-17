@@ -1,4 +1,18 @@
-import { Address, Contract, rpc, scValToNative } from '@stellar/stellar-sdk';
+import { Account, Address, Contract, rpc, scValToNative, TransactionBuilder, xdr } from '@stellar/stellar-sdk';
+import { getBrowserTestHarness } from './browserTestHarness';
+import {
+  EMPTY_VAULT_STATE,
+  deriveVaultState,
+  shortenAddress as shortenSharedAddress,
+  type VaultState,
+} from '../../../packages/vault-client/src/stellar';
+
+export type { VaultState };
+export { EMPTY_VAULT_STATE };
+
+export type VaultStateResult =
+  | { ok: true; state: VaultState }
+  | { ok: false; error: string };
 
 function requirePublicEnv(name: string): string {
   const value = process.env[name];
@@ -12,78 +26,74 @@ const RPC_URL = requirePublicEnv('NEXT_PUBLIC_SOROBAN_RPC_URL');
 const NETWORK_PASSPHRASE = requirePublicEnv('NEXT_PUBLIC_SOROBAN_NETWORK_PASSPHRASE');
 const VAULT_CONTRACT_ID = requirePublicEnv('NEXT_PUBLIC_VAULT_CONTRACT_ID');
 
-export const server = new rpc.Server(RPC_URL);
+export const server = new rpc.Server(RPC_URL, {
+  allowHttp: process.env.NEXT_PUBLIC_E2E_TESTS === 'true',
+});
 export const networkPassphrase = NETWORK_PASSPHRASE;
 
-export interface VaultState {
-  balance: number;
-  strategy: 'Conservative' | 'Balanced' | 'Growth';
-  exchangeRate: number;
-  apy: number;
+export async function simulateContractCall(
+  method: string,
+  args: xdr.ScVal[] = [],
+  callerAddress: string,
+): Promise<unknown> {
+  const testHarness = getBrowserTestHarness();
+  if (testHarness) return testHarness.simulateContractCall(method);
+
+  const account = new Account(callerAddress, '0');
+  const contract = new Contract(VAULT_CONTRACT_ID);
+  const tx = new TransactionBuilder(account, {
+    fee: '100',
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(contract.call(method, ...args))
+    .setTimeout(30)
+    .build();
+
+  const sim = await server.simulateTransaction(tx);
+  if (!rpc.Api.isSimulationSuccess(sim) || !sim.result?.retval) {
+    throw new Error(`Simulation failed for ${method}: ${'error' in sim ? sim.error : 'No retval'}`);
+  }
+  return scValToNative(sim.result.retval);
 }
 
-const STRATEGY_MAP: Record<string, VaultState['strategy']> = {
-  conservative: 'Conservative',
-  balanced: 'Balanced',
-  growth: 'Growth',
-};
-
-export async function fetchVaultState(userAddress?: string): Promise<VaultState> {
+export async function fetchVaultState(userAddress?: string): Promise<VaultStateResult> {
   if (!userAddress) {
-    return { balance: 0, strategy: 'Balanced', exchangeRate: 1.0, apy: 0 };
+    return { ok: true, state: { ...EMPTY_VAULT_STATE } };
   }
 
   try {
-    const contract = new Contract(VAULT_CONTRACT_ID);
-    const address = new Address(userAddress);
+    const userScVal = new Address(userAddress).toScVal();
 
-    const [balanceRes, strategyRes, exchangeRateRes, totalAssetsRes, totalSharesRes] = await Promise.all([
-      server.simulateContractInvocation({
-        contractAddress: VAULT_CONTRACT_ID,
-        method: 'get_balance',
-        methodArgs: { user: address.toScVal() },
-      }),
-      server.simulateContractInvocation({
-        contractAddress: VAULT_CONTRACT_ID,
-        method: 'get_user_strategy',
-        methodArgs: { user: address.toScVal() },
-      }),
-      server.simulateContractInvocation({
-        contractAddress: VAULT_CONTRACT_ID,
-        method: 'get_exchange_rate',
-      }),
-      server.simulateContractInvocation({
-        contractAddress: VAULT_CONTRACT_ID,
-        method: 'get_total_assets',
-      }),
-      server.simulateContractInvocation({
-        contractAddress: VAULT_CONTRACT_ID,
-        method: 'get_total_shares',
-      }),
+    const [balanceRes, strategyRes, exchangeRateRes, totalAssetsRes, totalSharesRes] = await Promise.allSettled([
+      simulateContractCall('get_balance', [userScVal], userAddress),
+      simulateContractCall('get_user_strategy', [userScVal], userAddress),
+      simulateContractCall('get_exchange_rate', [], userAddress),
+      simulateContractCall('get_total_assets', [], userAddress),
+      simulateContractCall('get_total_shares', [], userAddress),
     ]);
 
-    void contract;
+    const failedCall = [balanceRes, strategyRes, exchangeRateRes, totalAssetsRes, totalSharesRes]
+      .find((result) => result.status === 'rejected');
+    if (failedCall?.status === 'rejected') {
+      throw failedCall.reason;
+    }
 
-    const balance = Number(scValToNative(balanceRes.result.retval)) / 1e7;
-    const rawStrategy = String(scValToNative(strategyRes.result.retval));
-    const strategy = STRATEGY_MAP[rawStrategy] || 'Balanced';
-    const exchangeRateRaw = Number(scValToNative(exchangeRateRes.result.retval)) / 1e7;
-    const totalAssets = Number(scValToNative(totalAssetsRes.result.retval)) / 1e7;
-    const totalShares = Number(scValToNative(totalSharesRes.result.retval)) / 1e7;
-
-    const exchangeRate = exchangeRateRaw || (totalShares > 0 ? totalAssets / totalShares : 1.0);
-    const apy = totalAssets > 0 && totalShares > 0
-      ? Number((((totalAssets / totalShares - 1) * 365 * 100).toFixed(2)))
-      : 0;
-
-    return { balance, strategy, exchangeRate, apy };
+    return { ok: true, state: deriveVaultState({
+      balance: balanceRes.status === 'fulfilled' ? Number(balanceRes.value) / 1e7 : 0,
+      rawStrategy: strategyRes.status === 'fulfilled' ? String(strategyRes.value) : '',
+      exchangeRateRaw: exchangeRateRes.status === 'fulfilled' ? Number(exchangeRateRes.value) / 1e7 : 0,
+      totalAssets: totalAssetsRes.status === 'fulfilled' ? Number(totalAssetsRes.value) / 1e7 : 0,
+      totalShares: totalSharesRes.status === 'fulfilled' ? Number(totalSharesRes.value) / 1e7 : 0,
+    }) };
   } catch (err) {
     console.warn('Failed to fetch vault state from Soroban RPC:', err);
-    return { balance: 0, strategy: 'Balanced', exchangeRate: 1.0, apy: 0 };
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Unable to fetch vault state from Soroban RPC.',
+    };
   }
 }
 
 export function shortenAddress(address: string, chars = 4): string {
-  if (!address) return '';
-  return `${address.substring(0, chars + 2)}...${address.substring(address.length - chars)}`;
+  return shortenSharedAddress(address, chars);
 }

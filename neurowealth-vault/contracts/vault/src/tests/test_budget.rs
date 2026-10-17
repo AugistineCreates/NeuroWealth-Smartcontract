@@ -12,7 +12,7 @@
 extern crate std;
 
 use super::utils::*;
-use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env};
+use soroban_sdk::{symbol_short, testutils::Address as _, vec, Address, Env};
 
 // ============================================================================
 // Helpers
@@ -61,6 +61,48 @@ fn test_budget_deposit() {
 
     // Strict 10% tolerance over baseline
     check_baseline("deposit", cpu, mem, 4_500_000, 270_000);
+}
+
+#[test]
+fn test_budget_batch_deposit_uses_fewer_resources_than_two_deposits() {
+    let first_amount = 10_000_000_i128;
+    let second_amount = 20_000_000_i128;
+
+    let batch_env = Env::default();
+    batch_env.mock_all_auths();
+    let (batch_contract, _agent, _owner, batch_token) = setup_vault_with_token(&batch_env);
+    let batch_client = NeuroWealthVaultClient::new(&batch_env, &batch_contract);
+    let batch_user = Address::generate(&batch_env);
+    let batch_token_client = TestTokenClient::new(&batch_env, &batch_token);
+    batch_token_client.mint(&batch_user, &(first_amount + second_amount));
+    let entries = vec![
+        &batch_env,
+        (batch_token.clone(), first_amount),
+        (batch_token, second_amount),
+    ];
+
+    let (batch_cpu, batch_mem) = measure(&batch_env, || {
+        batch_client.batch_deposit(&batch_user, &entries);
+    });
+
+    let separate_env = Env::default();
+    separate_env.mock_all_auths();
+    let (separate_contract, _agent, _owner, separate_token) =
+        setup_vault_with_token(&separate_env);
+    let separate_client = NeuroWealthVaultClient::new(&separate_env, &separate_contract);
+    let separate_user = Address::generate(&separate_env);
+    let separate_token_client = TestTokenClient::new(&separate_env, &separate_token);
+    separate_token_client.mint(&separate_user, &(first_amount + second_amount));
+
+    let (separate_cpu, separate_mem) = measure(&separate_env, || {
+        separate_client.deposit(&separate_user, &first_amount);
+        separate_client.deposit(&separate_user, &second_amount);
+    });
+
+    std::println!(
+        "[budget] batch_deposit (2 entries) cpu={batch_cpu} mem={batch_mem}; two deposits cpu={separate_cpu} mem={separate_mem}"
+    );
+    assert!(batch_cpu < separate_cpu, "batch_deposit should use less CPU");
 }
 
 // ============================================================================

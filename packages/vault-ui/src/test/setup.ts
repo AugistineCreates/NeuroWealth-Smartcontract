@@ -17,6 +17,19 @@ class ResizeObserverStub {
   disconnect() {}
 }
 
+if (typeof HTMLCanvasElement !== 'undefined') {
+  Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+    configurable: true,
+    value: () => null,
+  });
+}
+
 if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
+}
+
+declare module 'vitest' {
+  interface Assertion {
+    toHaveNoViolations(): void;
+  }
 }

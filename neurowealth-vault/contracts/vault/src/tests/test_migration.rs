@@ -1,7 +1,15 @@
 //! Tests for vault migration functionality (#637)
 
 use super::utils::*;
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address, Env};
+
+/// Schedules a migration target and executes it once the timelock has passed (#969).
+fn set_target_now(env: &Env, client: &NeuroWealthVaultClient, owner: &Address, target: &Address) {
+    client.schedule_migration_target(owner, target);
+    let (_, effective_ledger) = client.get_pending_migration_target().unwrap();
+    env.ledger().set_sequence_number(effective_ledger);
+    client.execute_migration_target(owner);
+}
 
 #[test]
 fn test_set_migration_target_by_owner() {
@@ -14,7 +22,7 @@ fn test_set_migration_target_by_owner() {
     let new_vault = Address::generate(&env);
 
     // Owner can set migration target
-    client.set_migration_target(&owner, &new_vault);
+    set_target_now(&env, &client, &owner, &new_vault);
 
     // Verify the target was set
     // Note: We'd need a getter for migration target, but for now test the event
@@ -35,7 +43,7 @@ fn test_set_migration_target_unauthorized() {
     let new_vault = Address::generate(&env);
 
     // Non-owner cannot set migration target
-    client.set_migration_target(&unauthorized, &new_vault);
+    client.schedule_migration_target(&unauthorized, &new_vault);
 }
 
 #[test]
@@ -100,7 +108,7 @@ fn test_migrate_when_paused_fails() {
     let new_vault = Address::generate(&env);
 
     mint_and_deposit(&env, &client, &usdc_token, &user, amount);
-    client.set_migration_target(&owner, &new_vault);
+    set_target_now(&env, &client, &owner, &new_vault);
     client.set_migration_paused(&owner, &true);
 
     // Migration when paused should fail
@@ -119,7 +127,7 @@ fn test_migrate_without_shares_fails() {
     let user = Address::generate(&env);
     let new_vault = Address::generate(&env);
 
-    client.set_migration_target(&owner, &new_vault);
+    set_target_now(&env, &client, &owner, &new_vault);
 
     // Migration without shares should fail
     client.migrate_shares(&user);
@@ -151,7 +159,7 @@ fn test_exchange_rate_preserved_during_migration() {
     let expected_value = (shares_before * total_assets_before) / total_shares_before;
 
     // Set migration target
-    client.set_migration_target(&owner, &new_vault);
+    set_target_now(&env, &client, &owner, &new_vault);
 
     // Note: Full migration test would require setting up a second vault contract
     // For now, we test the setup and state changes
@@ -172,7 +180,7 @@ fn test_migration_emits_correct_event() {
     let new_vault = Address::generate(&env);
 
     mint_and_deposit(&env, &client, &usdc_token, &user, amount);
-    client.set_migration_target(&owner, &new_vault);
+    set_target_now(&env, &client, &owner, &new_vault);
 
     // Check migration target update event
     let events = env.events().all();

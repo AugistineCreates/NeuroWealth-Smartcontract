@@ -72,7 +72,7 @@ Persistent storage is used for per-user data that requires efficient access.
 | --- | ---------------------------- | --------------- | ------------------------------------------------------------------- |
 |     | `Shares(Address)`            | i128            | User's share balance (proportional ownership)                       |
 |     | `UserStrategy(Address)`      | Symbol          | Per-user strategy preference ("conservative", "balanced", "growth") |
-|     | `LockedShares(Address)`      | i128            | Shares locked for boosted APY (Issue #636)                          |
+|     | `LockedShares(Address)`      | i128            | Shares locked by the user (Issue #636)                              |
 |     | `LockExpiry(Address)`        | u32             | Ledger when the user's locked shares unlock (Issue #636)            |
 |     | `LastDepositLedger(Address)` | u32             | Ledger of the user's most recent deposit (Issue #659)               |
 |     | `DepositSnapshot(Address)`   | DepositSnapshot | First-deposit snapshot for realized-APY computation (Issue #462)    |
@@ -166,6 +166,25 @@ expired and removed).
 refreshes TTL as part of normal writes. Routine user activity keeps share data
 alive without calling `touch_user_ttl`.
 
+### TTL-bearing storage entries
+
+Every entry that costs rent, the parameters used to bump it, and who has to act
+when a bump cannot be funded (#844). Tests for the failure paths live in
+`contracts/vault/src/tests/test_ttl_extension_failures.rs`.
+
+| Entry | Storage | Extended by | Bump parameters | On unfunded bump |
+| --- | --- | --- | --- | --- |
+| `Shares(user)` | Persistent | `deposit`, `withdraw`, `withdraw_all` (implicit, on write); `touch_user_ttl` (explicit) | threshold 100 ledgers → extend-to 100 ledgers | Entry is clamped to the network window; if it has already lapsed `touch_user_ttl` returns `false` and the user must deposit again to restore the entry. Shares and balances are never altered by a failed bump. |
+| `UserStrategy(user)` | Persistent | `set_user_strategy`, `deposit` (default write) | refreshed on write | Strategy preference reads as unset; the agent falls back to the default strategy. No asset impact. |
+| Protocol token approvals (Blend/DEX) | Token contract | `rebalance`, `deposit`/`withdraw` to a protocol | `sequence + ApprovalTtl` (owner-configurable, 1,000–500,000 ledgers) | The approval simply lapses; the next protocol operation re-approves. `set_approval_ttl` publishes `ProtocolApprovalScheduledEvent` (`ttl_sch`) with the expiry ledger and renewal deadline so operators renew in time instead of discovering a failed transaction. |
+| All other keys (`TotalAssets`, `TotalShares`, `Owner`, …) | Instance | any state-changing call | instance TTL is bumped by the host on write | Instance state does not expire on its own; a vault whose instance entry lapses must be restored by the operator, which is why vault accounting is never written to persistent storage. |
+
+**Operator recovery.** The only entry whose loss is user-visible is
+`Shares(user)`. Because `deposit` recreates it, recovery is a normal deposit -
+no bump, however well funded, can restore an entry that has already expired.
+`touch_user_ttl` therefore reports `false` rather than failing the caller's
+transaction, and a partially funded bump is clamped rather than rejected.
+
 ## DataKey Structure
 
 ```rust
@@ -209,7 +228,7 @@ pub enum DataKey {
     UserSharesIndex,      // append-only Vec<Address> of share holders (#440)
     MigrationTarget,      // target vault for share migration (#637)
     MigrationPaused,      // migration-only pause flag (#637)
-    LockedShares(Address),// user -> shares locked for boosted APY (#636)
+    LockedShares(Address),// user -> shares locked by the user (#636)
     ApyPrediction(Symbol),// protocol -> latest ML APY prediction (#650)
     CumulativeMevLoss,    // total suspected MEV loss (#658)
     MevIncidentCount,     // number of suspected MEV incidents (#658)
@@ -704,6 +723,10 @@ has not yet recovered:
 
 A shortfall on an exit leg is not fatal: the un-recovered amount simply remains
 in place and is corrected on the next rebalance, keeping the vault solvent.
+`min_out` is a basis-point slippage tolerance converted independently for each
+venue leg from that leg's expected amount. Incomplete exits emit
+`RebalanceFailedEvent`, increment `ConsecutiveFailures`, and can auto-pause the
+vault. They do not update `LastRebalanceLedger`, because no rebalance completed.
 
 ### Proportional withdrawal
 
@@ -1523,7 +1546,16 @@ so both privileged-role changes share one recovery window.
   `execute_upgrade()` succeeds, the deployed WASM is unchanged.
 
 Operational runbooks for scheduling, monitoring, and executing an upgrade live
-in [docs/UPGRADE_MIGRATION.md](docs/UPGRADE_MIGRATION.md). 4. Minimize state changes in single transaction
+in [docs/UPGRADE_MIGRATION.md](docs/UPGRADE_MIGRATION.md).
+
+### Second-Signature Evaluation & Multi-Sig Governance (Issues #607, #922)
+
+The risk of single-key owner compromise during upgrade execution was analyzed in [`docs/GUARDIAN_KEY_DESIGN.md`](docs/GUARDIAN_KEY_DESIGN.md) (Issue #607), comparing a bespoke smart-contract-level guardian key (`DataKey::Guardian` co-signing `execute_upgrade`) against Stellar native account multi-sig.
+
+Under Issue #922, the decision was formally recorded:
+- **Contract-Level Guardian Pattern Deferred**: Smart-contract-level guardian keys are formally deferred. Adding contract-level guardian logic introduces redundant state, extra entrypoints (`set_guardian`, `remove_guardian`), extra auth checks, and consumes limited `#[contracterror]` variants while only protecting `execute_upgrade`.
+- **Protocol-Level Multi-Sig Adopted for Owner**: For mainnet deployment, the owner address is held by a Stellar native multi-sig account (e.g. 2-of-3 threshold). Stellar Layer-1 multi-sig enforces M-of-N threshold signatures across **all** privileged calls (`schedule_upgrade`, `execute_upgrade`, `pause`, pool configuration) without contract changes or code overhead.
+- **Defense-in-Depth**: The 24-hour upgrade timelock delay (`UPGRADE_TIMELOCK_LEDGERS = 17,280`) and permissionless visibility via `UpgradeScheduledEvent` ensure that off-chain monitoring and keyholders have ample time to detect unauthorized proposals and invoke `cancel_upgrade()` or `pause()` before any upgrade can be executed.
 
 ## Stale-State & Checks-Effects-Interactions Audit (Issue #568)
 
@@ -1613,14 +1645,14 @@ The `NeuroWealthVault` contract interacts with three categories of external smar
 
 | Key                     | Type | Description                                             |
 | ----------------------- | ---- | ------------------------------------------------------- |
-| `LockedShares(Address)` | i128 | User's locked shares for boosted APY (#636)             |
+| `LockedShares(Address)` | i128 | User's locked shares (#636)                             |
 | `LockExpiry(Address)`   | u32  | Ledger when user's locked shares can be unlocked (#636) |
 
 ### Updated Access Patterns
 
 | Key                  | Category   | Writers                           | Readers                                | TTL                |
 | -------------------- | ---------- | --------------------------------- | -------------------------------------- | ------------------ |
-| `MigrationTarget`    | Instance   | Owner (set_migration_target)      | Everyone                               | None               |
+| `MigrationTarget`    | Instance   | Owner (schedule/execute_migration_target) | Everyone                               | None               |
 | `MigrationPaused`    | Instance   | Owner (set_migration_paused)      | Everyone                               | None               |
 | `LockedShares(user)` | Persistent | User (lock_shares, unlock_shares) | User, get_locked_shares                | Automatic on write |
 | `LockExpiry(user)`   | Persistent | User (lock_shares)                | User, unlock_shares, get_locked_shares | Automatic on write |
@@ -1637,7 +1669,7 @@ The `NeuroWealthVault` contract interacts with three categories of external smar
 **New Persistent Storage Keys (lines 50-51):**
 
 ```markdown
-| `LockedShares(Address)` | i128 | User's locked shares for boosted APY (#636) |
+| `LockedShares(Address)` | i128 | User's locked shares (#636) |
 | `LockExpiry(Address)` | u32 | Ledger when user's locked shares can be unlocked (#636) |
 ```
 
@@ -1668,17 +1700,17 @@ The `NeuroWealthVault` contract interacts with three categories of external smar
 - Does not affect rebalance or admin operations
 - Maintains same rounding and accounting rules as regular withdrawals
 
-### Share Locking for Boosted APY (#636)
+### Share Locking (#636)
 
-**Purpose**: Allows users to voluntarily lock shares for configurable periods in exchange for boosted APY, similar to ve-tokenomics patterns.
+**Purpose**: Allows users to voluntarily lock shares for a fixed period.
 
 **Key Features**:
 
-- Three lock duration tiers: 30 days (1.1x), 90 days (1.25x), 180 days (1.5x)
+- Three lock durations: 30, 90 and 180 days
 - Locked shares cannot be withdrawn until lock period expires
 - Withdraw functions respect lock state (only unlocked shares can be withdrawn)
-- Boost multiplier affects share price calculation
 - Users can unlock shares after expiry
+- Locking does not boost yield yet. Locked and unlocked shares earn the same share-price growth (#971)
 
 **Storage**:
 
@@ -1703,7 +1735,7 @@ The `NeuroWealthVault` contract interacts with three categories of external smar
 
 **Key Features**:
 
-- Owner sets migration target address
+- Owner schedules a migration target, which only takes effect after a ~24 h timelock (same delay as upgrades, #969)
 - Users can migrate shares independently
 - Exchange rate preserved through conversion calculation
 - Migration can be paused independently of main vault pause
@@ -1717,12 +1749,15 @@ The `NeuroWealthVault` contract interacts with three categories of external smar
 **Events**:
 
 - `SharesMigratedEvent` (topic `"migrate"`)
+- `MigrationTargetScheduledEvent` (topic `"mig_sched"`)
+- `MigrationTargetCancelledEvent` (topic `"mig_cncl"`)
 - `MigrationTargetUpdatedEvent` (topic `"mig_tgt"`)
 - `MigrationPausedEvent` (topic `"mig_pse"`)
 
 **Security Considerations**:
 
 - Migration target must be owner-set (prevents malicious contracts)
+- Target changes are timelocked, so users can see a change coming and exit before it applies; the owner can cancel during the window
 - Migration can be paused independently for safety
 - Exchange rate calculated at migration time to preserve value
 - User authentication required for migration
