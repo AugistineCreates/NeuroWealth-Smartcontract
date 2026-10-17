@@ -310,14 +310,10 @@ This register documents every owner-only and agent-only capability, the blast ra
 | touch_user_ttl | - | - | - | anyone |
 | set_user_strategy | - | - | yes | - |
 | set_min_holding_period | yes | - | - | - |
-| get_min_holding_period | - | - | - | anyone |
 | submit_mev_report | - | yes | - | - |
-| get_mev_stats | - | - | - | anyone |
 | set_max_acceptable_mev_loss | yes | - | - | - |
 | submit_apy_prediction | - | yes | - | - |
-| get_apy_prediction | - | - | - | anyone |
-| get_vault_health_snapshot | - | - | - | anyone |
-| get_withdrawal_eligibility | - | - | - | anyone |
+
 
 ### Emergency Harvest Fallback (Issue #506)
 
@@ -441,8 +437,12 @@ operators from assessing vault state.
 | `preview_withdraw` | 🟢 ALLOWED |
 | `convert_to_shares` | 🟢 ALLOWED |
 | `convert_to_assets` | 🟢 ALLOWED |
+| `get_min_holding_period` | 🟢 ALLOWED |
+| `get_mev_stats` | 🟢 ALLOWED |
+| `get_apy_prediction` | 🟢 ALLOWED |
 | `get_vault_health_snapshot` | 🟢 ALLOWED |
 | `get_withdrawal_eligibility` | 🟢 ALLOWED |
+
 
 ### Note on Withdrawal Semantics
 

@@ -1,26 +1,15 @@
 import '@testing-library/jest-dom/vitest';
 import { expect } from 'vitest';
+import * as matchers from 'vitest-axe/matchers';
 
-type AxeResult = {
-  violations?: Array<{ id: string }>;
-};
+const customMatchers = (matchers && typeof matchers === 'object' && 'toHaveNoViolations' in matchers)
+  ? matchers
+  : (matchers as any)?.default || matchers || {};
 
-expect.extend({
-  toHaveNoViolations(received: AxeResult) {
-    const violations = received?.violations ?? [];
-    const pass = violations.length === 0;
+if (customMatchers && typeof customMatchers === 'object' && Object.keys(customMatchers).length > 0) {
+  expect.extend(customMatchers);
+}
 
-    return {
-      pass,
-      message: () =>
-        pass
-          ? 'Expected accessibility violations, but none were found.'
-          : `Expected no accessibility violations, but found ${violations.length}: ${violations
-              .map((violation) => violation.id)
-              .join(', ')}`,
-    };
-  },
-});
 
 class ResizeObserverStub {
   observe() {}

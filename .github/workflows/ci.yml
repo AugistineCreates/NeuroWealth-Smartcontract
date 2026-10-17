@@ -54,7 +54,8 @@ jobs:
           gitleaks version
 
       - name: Run gitleaks (full history)
-        run: gitleaks git --redact -v --config .gitleaks.toml .
+        run: gitleaks git --redact -v --config .gitleaks.toml --gitleaks-ignore-path .gitleaksignore .
+
 
   ci-matrix:
     name: CI Matrix
