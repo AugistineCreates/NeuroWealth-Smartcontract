@@ -99,3 +99,5 @@ yarn-error.log*
 
 # Agent local state (ledger cursor fallback)
 .agent-state/
+
+fix.md

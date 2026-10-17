@@ -25,6 +25,6 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Check db/schema.sql and db/types.ts against supabase/migrations
+      - name: Check db/types.ts against supabase/migrations
         run: |
           python3 scripts/check-schema-drift.py

@@ -63,6 +63,7 @@ Runtime: Node.js
 Stellar SDK: @stellar/stellar-sdk
 AI: OpenAI intent parsing in `agent/`. The WhatsApp bot uses a keyword/regex parser. Claude is not integrated
 Database: PostgreSQL / Supabase for user position tracking
+Scheduling: In-memory priority queue with gas awareness (RebalanceScheduler)
 
 ### Frontend
 
@@ -238,7 +239,7 @@ See [`scripts/README-E2E.md`](scripts/README-E2E.md) for end-to-end devnet valid
 | [`docs/DEX_INTEGRATION.md`](docs/DEX_INTEGRATION.md) | DEX strategy behaviour, integration assumptions, and liquidity routing |
 | [`docs/BLEND_INTEGRATION_RESEARCH.md`](docs/BLEND_INTEGRATION_RESEARCH.md) | Blend protocol supply/withdraw design and cross-contract call patterns |
 | [`docs/LEAST_PRIVILEGE_AGENT.md`](docs/LEAST_PRIVILEGE_AGENT.md) | Least-privilege evaluation: separate rebalancer vs reporter agent roles (Issue #606) |
-| [`docs/GUARDIAN_KEY_DESIGN.md`](docs/GUARDIAN_KEY_DESIGN.md) | Guardian-key design: second signature for `execute_upgrade` (Issue #607) |
+| [`docs/GUARDIAN_KEY_DESIGN.md`](docs/GUARDIAN_KEY_DESIGN.md) | Guardian-key evaluation: second signature for `execute_upgrade` (Issues #607, #922 — formally deferred) |
 
 | [`docs/FORMAL_VERIFICATION.md`](docs/FORMAL_VERIFICATION.md) | Kani proofs and share-accounting properties (Issue #672) |
 | [`docs/ACCESSIBILITY.md`](docs/ACCESSIBILITY.md) | WCAG 2.1 AA statement, axe-core CI, and screen-reader checklist (Issue #668) |
@@ -545,9 +546,16 @@ The deployment script will:
 
 ### Testnet
 
+There is no dedicated testnet script. `scripts/deploy-devnet.sh` is the only
+non-mainnet deployment script; it reads `SOROBAN_RPC_URL` and
+`SOROBAN_NETWORK_PASSPHRASE` from the environment, so point those at the
+testnet endpoints to deploy there:
+
 ```bash
-# Deploy everything to Stellar testnet
-./scripts/deploy.sh --network testnet
+# Run `./scripts/deploy-devnet.sh --help` for all options
+export SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
+export SOROBAN_NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
+./scripts/deploy-devnet.sh
 ```
 
 ### Mainnet
@@ -560,7 +568,7 @@ npm ci
 npm test
 
 # Deploy to mainnet
-./scripts/deploy.sh --network mainnet
+./scripts/deploy-mainnet.sh
 ```
 ## Infrastructure (Recommended)
 
@@ -606,7 +614,7 @@ Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md)
    git push origin feature/your-feature-name
    ```
 2. **Open a Pull Request** against the `main` branch.
-3. Please make sure to run `cargo test` and `npm test` before submitting.
+3. Please make sure to run `cargo test` (in `neurowealth-vault/`) and `npm test` (in each package you changed, e.g. `agent/` or `whatsapp/`) before submitting.
 
 
 ### On-chain rate limits

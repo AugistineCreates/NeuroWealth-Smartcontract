@@ -1546,7 +1546,16 @@ so both privileged-role changes share one recovery window.
   `execute_upgrade()` succeeds, the deployed WASM is unchanged.
 
 Operational runbooks for scheduling, monitoring, and executing an upgrade live
-in [docs/UPGRADE_MIGRATION.md](docs/UPGRADE_MIGRATION.md). 4. Minimize state changes in single transaction
+in [docs/UPGRADE_MIGRATION.md](docs/UPGRADE_MIGRATION.md).
+
+### Second-Signature Evaluation & Multi-Sig Governance (Issues #607, #922)
+
+The risk of single-key owner compromise during upgrade execution was analyzed in [`docs/GUARDIAN_KEY_DESIGN.md`](docs/GUARDIAN_KEY_DESIGN.md) (Issue #607), comparing a bespoke smart-contract-level guardian key (`DataKey::Guardian` co-signing `execute_upgrade`) against Stellar native account multi-sig.
+
+Under Issue #922, the decision was formally recorded:
+- **Contract-Level Guardian Pattern Deferred**: Smart-contract-level guardian keys are formally deferred. Adding contract-level guardian logic introduces redundant state, extra entrypoints (`set_guardian`, `remove_guardian`), extra auth checks, and consumes limited `#[contracterror]` variants while only protecting `execute_upgrade`.
+- **Protocol-Level Multi-Sig Adopted for Owner**: For mainnet deployment, the owner address is held by a Stellar native multi-sig account (e.g. 2-of-3 threshold). Stellar Layer-1 multi-sig enforces M-of-N threshold signatures across **all** privileged calls (`schedule_upgrade`, `execute_upgrade`, `pause`, pool configuration) without contract changes or code overhead.
+- **Defense-in-Depth**: The 24-hour upgrade timelock delay (`UPGRADE_TIMELOCK_LEDGERS = 17,280`) and permissionless visibility via `UpgradeScheduledEvent` ensure that off-chain monitoring and keyholders have ample time to detect unauthorized proposals and invoke `cancel_upgrade()` or `pause()` before any upgrade can be executed.
 
 ## Stale-State & Checks-Effects-Interactions Audit (Issue #568)
 

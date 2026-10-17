@@ -10,6 +10,17 @@ This changelog is tied to the vault contract `Version` storage value. Each relea
 
 ## [Unreleased]
 <!-- Add entries below. Format: `- Short description (Issue #N).` -->
+- **WhatsApp bot hardening (Issues #943, #944, #945, #946; no contract change):**
+  OTP challenges and sessions are persisted in Postgres (`whatsapp_otps`,
+  `whatsapp_sessions`) with atomic, replica-safe operations; custodial wallet
+  secrets use envelope encryption with a versioned KEK, `npm run rotate-keys`
+  and a custody threat model in `SECURITY.md`; the service validates its
+  environment on boot (`envGuard`), `check-no-production-defaults.py` covers
+  the new variables, and the inbound-webhook idempotency ledger lost in a
+  revert is restored with replay tests; README deploy/test commands now point
+  at scripts that exist. Requires applying
+  `20261016000000_whatsapp_otps_sessions_key_envelope.sql` (and
+  `20261015000000_whatsapp_inbound_webhooks.sql`) and setting `DATABASE_URL`.
 - **Per-leg rebalance slippage:** `rebalance`, `rebalance_multi`, and `harvest`
   now interpret `min_out` as a basis-point tolerance and derive an independent
   minimum for every supply/withdraw leg, including each multi-protocol venue.
