@@ -227,7 +227,7 @@ See [`scripts/README-E2E.md`](scripts/README-E2E.md) for end-to-end devnet valid
 | [`docs/DEX_INTEGRATION.md`](docs/DEX_INTEGRATION.md) | DEX strategy behaviour, integration assumptions, and liquidity routing |
 | [`docs/BLEND_INTEGRATION_RESEARCH.md`](docs/BLEND_INTEGRATION_RESEARCH.md) | Blend protocol supply/withdraw design and cross-contract call patterns |
 | [`docs/LEAST_PRIVILEGE_AGENT.md`](docs/LEAST_PRIVILEGE_AGENT.md) | Least-privilege evaluation: separate rebalancer vs reporter agent roles (Issue #606) |
-| [`docs/GUARDIAN_KEY_DESIGN.md`](docs/GUARDIAN_KEY_DESIGN.md) | Guardian-key design: second signature for `execute_upgrade` (Issue #607) |
+| [`docs/GUARDIAN_KEY_DESIGN.md`](docs/GUARDIAN_KEY_DESIGN.md) | Guardian-key evaluation: second signature for `execute_upgrade` (Issues #607, #922 — formally deferred) |
 
 | [`docs/FORMAL_VERIFICATION.md`](docs/FORMAL_VERIFICATION.md) | Kani proofs and share-accounting properties (Issue #672) |
 | [`docs/ACCESSIBILITY.md`](docs/ACCESSIBILITY.md) | WCAG 2.1 AA statement, axe-core CI, and screen-reader checklist (Issue #668) |
