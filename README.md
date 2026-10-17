@@ -63,6 +63,7 @@ Runtime: Node.js
 Stellar SDK: @stellar/stellar-sdk
 AI: OpenAI intent parsing in `agent/`. The WhatsApp bot uses a keyword/regex parser. Claude is not integrated
 Database: PostgreSQL / Supabase for user position tracking
+Scheduling: In-memory priority queue with gas awareness (RebalanceScheduler)
 
 ### Frontend
 
