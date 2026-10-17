@@ -1,6 +1,6 @@
 import pino from 'pino';
 import { query } from './db';
-import { hashPhoneNumber, encryptSecretKey, decryptSecretKey } from './cryptoUtils';
+import { hashPhoneNumber, encryptField, decryptField } from './cryptoUtils';
 import { boundProviderCallback } from './inputBounds';
 
 const logger = pino({ name: 'whatsapp-message-delivery' });
@@ -89,7 +89,7 @@ export async function applyDeliveryStatus(callback: DeliveryStatusCallback): Pro
 
   if (existing.rows.length === 0) {
     const phoneHash = to ? hashPhoneNumber(to) : null;
-    const encryptedTo = to ? encryptSecretKey(to) : null;
+    const encryptedTo = to ? encryptField(to) : null;
 
     await query(
       `INSERT INTO whatsapp_message_deliveries
@@ -177,7 +177,7 @@ export async function retryFailedDelivery(
     return { retried: false, escalated: true };
   }
 
-  const to = decryptSecretKey(row.to_encrypted, row.to_iv, row.to_tag);
+  const to = decryptField(row.to_encrypted, row.to_iv, row.to_tag);
 
   await query(
     'UPDATE whatsapp_message_deliveries SET retry_count = retry_count + 1, updated_at = NOW() WHERE message_sid = $1',
