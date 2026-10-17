@@ -57,19 +57,19 @@ export function PoolConfiguration({ client, signer }: PoolConfigurationProps) {
     setTxHash(null);
 
     try {
-      const result = await client.set_blend_pool(
-        signer,
-        signer.publicKey(),
-        newBlendPool,
-      );
-      setTxHash(result.hash);
+      const result = await client.set_blend_pool(signer, signer.publicKey(), newBlendPool);
+      setTxHash(result?.hash ?? null);
       setBlendPool(newBlendPool);
 
       // Poll for confirmation
       const server = getSorobanServer(network);
+      const txHash = result?.hash;
+      if (!txHash) {
+        throw new Error("Transaction hash missing");
+      }
       for (let i = 0; i < 60; i++) {
         try {
-          const tx = await server.getTransaction(result.hash);
+          const tx = await server.getTransaction(txHash);
           if (tx.status === "SUCCESS") break;
         } catch {
           // Not confirmed yet
@@ -94,19 +94,19 @@ export function PoolConfiguration({ client, signer }: PoolConfigurationProps) {
     setTxHash(null);
 
     try {
-      const result = await client.set_dex_pool(
-        signer,
-        signer.publicKey(),
-        newDexPool,
-      );
-      setTxHash(result.hash);
+      const result = await client.set_dex_pool(signer, signer.publicKey(), newDexPool);
+      setTxHash(result?.hash ?? null);
       setDexPool(newDexPool);
 
       // Poll for confirmation
       const server = getSorobanServer(network);
+      const txHash = result?.hash;
+      if (!txHash) {
+        throw new Error("Transaction hash missing");
+      }
       for (let i = 0; i < 60; i++) {
         try {
-          const tx = await server.getTransaction(result.hash);
+          const tx = await server.getTransaction(txHash);
           if (tx.status === "SUCCESS") break;
         } catch {
           // Not confirmed yet

@@ -13,9 +13,10 @@
 /* eslint-disable */
 // @ts-nocheck  (cast-heavy generated file — type-checked at the call site)
 
-import * as StellarSdk from "@stellar/stellar-sdk";
+import * as StellarSdk from '@stellar/stellar-sdk';
 
 const { nativeToScVal, scValToNative, xdr } = StellarSdk;
+
 
 // ----------------------------------------------------------------
 // Constants
@@ -929,6 +930,8 @@ export const VaultErrorCode = {
   ProtocolAdapterNotConfigured: 81,
   /** The requested protocol is not on the owner-managed whitelist (#656). */
   ProtocolNotWhitelisted: 82,
+  /** The token is not configured for the requested vault asset operation. */
+  UnsupportedAsset: 83,
   /** General validation error */
   ValidationError: 100,
   /** Vault is paused, deposits and withdrawals disabled */
@@ -949,8 +952,8 @@ export const VaultErrorCode = {
   SlippageError: 108,
 } as const;
 
-export type VaultErrorCode =
-  (typeof VaultErrorCode)[keyof typeof VaultErrorCode];
+export type VaultErrorCode = typeof VaultErrorCode[keyof typeof VaultErrorCode];
+
 
 /**
  * Typed error wrapping contract-level VaultError responses.
@@ -974,10 +977,7 @@ export class VaultError extends Error {
   static fromContractError(error: unknown): VaultError {
     if (error && typeof error === "object" && "code" in error) {
       const obj = error as { code: number; message?: string };
-      return new VaultError(
-        obj.code as VaultErrorCode,
-        obj.message ?? String(obj.code),
-      );
+      return new VaultError(obj.code as VaultErrorCode, obj.message ?? String(obj.code));
     }
     if (typeof error === "string") {
       return new VaultError(0 as VaultErrorCode, error);
@@ -1046,12 +1046,9 @@ export class VaultClient {
     networkPassphrase?: string;
   }) {
     this.contractId = options.contractId;
-    const rpcUrl = options.rpcUrl ?? "https://soroban-testnet.stellar.org";
-    this.networkPassphrase =
-      options.networkPassphrase ?? StellarSdk.Networks.TESTNET;
-    this.server = new StellarSdk.SorobanRpc.Server(rpcUrl, {
-      allowHttp: rpcUrl.startsWith("http://"),
-    });
+    const rpcUrl = options.rpcUrl ?? 'https://soroban-testnet.stellar.org';
+    this.networkPassphrase = options.networkPassphrase ?? StellarSdk.Networks.TESTNET;
+    this.server = new StellarSdk.SorobanRpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') });
   }
 
   // ------------------------------------------------------------------
@@ -1094,9 +1091,9 @@ export class VaultClient {
     args: StellarSdk.xdr.ScVal[],
     sourcePublicKey: string,
   ): Promise<T> {
-    const account = await this.server.getAccount(sourcePublicKey);
+    const account  = await this.server.getAccount(sourcePublicKey);
     const tx = new StellarSdk.TransactionBuilder(account, {
-      fee: "100",
+      fee: '100',
       networkPassphrase: this.networkPassphrase,
     })
       .addOperation(this.buildOperation(method, args))
@@ -1107,9 +1104,7 @@ export class VaultClient {
     if (StellarSdk.SorobanRpc.Api.isSimulationError(sim)) {
       this.throwVaultError(method, sim.error ?? sim);
     }
-    const resultEntry = (
-      sim as StellarSdk.SorobanRpc.Api.SimulateTransactionSuccessResponse
-    ).result;
+    const resultEntry = (sim as StellarSdk.SorobanRpc.Api.SimulateTransactionSuccessResponse).result;
     if (!resultEntry) return undefined as unknown as T;
     return scValToNative(resultEntry.retval) as T;
   }
@@ -1125,7 +1120,7 @@ export class VaultClient {
   ): Promise<TxResult<T>> {
     const account = await this.server.getAccount(signer.publicKey());
     const tx = new StellarSdk.TransactionBuilder(account, {
-      fee: "100",
+      fee: '100',
       networkPassphrase: this.networkPassphrase,
     })
       .addOperation(this.buildOperation(method, args))
@@ -1141,30 +1136,23 @@ export class VaultClient {
     prepared.sign(signer);
 
     const sendResp = await this.server.sendTransaction(prepared);
-    if (sendResp.status === "ERROR") {
+    if (sendResp.status === 'ERROR') {
       this.throwVaultError(method, sendResp.errorResult ?? sendResp);
     }
 
     // Poll until confirmed
     let getResp = await this.server.getTransaction(sendResp.hash);
     const deadline = Date.now() + 30_000;
-    while (
-      getResp.status ===
-        StellarSdk.SorobanRpc.Api.GetTransactionStatus.NOT_FOUND &&
-      Date.now() < deadline
-    ) {
-      await new Promise((r) => setTimeout(r, 1000));
+    while (getResp.status === StellarSdk.SorobanRpc.Api.GetTransactionStatus.NOT_FOUND
+        && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 1000));
       getResp = await this.server.getTransaction(sendResp.hash);
     }
-    if (
-      getResp.status === StellarSdk.SorobanRpc.Api.GetTransactionStatus.FAILED
-    ) {
+    if (getResp.status === StellarSdk.SorobanRpc.Api.GetTransactionStatus.FAILED) {
       this.throwVaultError(method, getResp);
     }
 
-    const retval = (
-      getResp as StellarSdk.SorobanRpc.Api.GetSuccessfulTransactionResponse
-    ).returnValue;
+    const retval = (getResp as StellarSdk.SorobanRpc.Api.GetSuccessfulTransactionResponse).returnValue;
     return {
       hash: sendResp.hash,
       result: retval ? (scValToNative(retval) as T) : undefined,
@@ -1185,22 +1173,9 @@ export class VaultClient {
    * @param salt
    * @fires VaultInitializedEvent
    */
-  async initialize(
-    signer: StellarSdk.Keypair,
-    deployer: string,
-    owner: string,
-    agent: string,
-    usdc_token: string,
-    salt: Uint8Array,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(deployer).toScVal(),
-      new StellarSdk.Address(owner).toScVal(),
-      new StellarSdk.Address(agent).toScVal(),
-      new StellarSdk.Address(usdc_token).toScVal(),
-      nativeToScVal(salt, { type: "bytes" }),
-    ];
-    return this.invoke<void>("initialize", args, signer);
+  async initialize(signer: StellarSdk.Keypair, deployer: string, owner: string, agent: string, usdc_token: string, salt: Uint8Array): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(deployer).toScVal(), new StellarSdk.Address(owner).toScVal(), new StellarSdk.Address(agent).toScVal(), new StellarSdk.Address(usdc_token).toScVal(), nativeToScVal(salt, { type: 'bytes' })];
+    return this.invoke<void>('initialize', args, signer);
   }
 
   /**
@@ -1218,16 +1193,9 @@ export class VaultClient {
    * - shares_to_mint > 0 (non-zero mint guard)
    * @fires DepositEvent
    */
-  async deposit(
-    signer: StellarSdk.Keypair,
-    user: string,
-    amount: bigint,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-      nativeToScVal(amount, { type: "i128" }),
-    ];
-    return this.invoke<void>("deposit", args, signer);
+  async deposit(signer: StellarSdk.Keypair, user: string, amount: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal(), nativeToScVal(amount, { type: 'i128' })];
+    return this.invoke<void>('deposit', args, signer);
   }
 
   /**
@@ -1241,16 +1209,9 @@ export class VaultClient {
    * - batch consumes both deposit and batch-deposit rate-limit buckets
    * @fires DepositEvent
    */
-  async batch_deposit(
-    signer: StellarSdk.Keypair,
-    user: string,
-    entries: unknown,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-      nativeToScVal(entries),
-    ];
-    return this.invoke<void>("batch_deposit", args, signer);
+  async batch_deposit(signer: StellarSdk.Keypair, user: string, entries: unknown): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal(), nativeToScVal(entries)];
+    return this.invoke<void>('batch_deposit', args, signer);
   }
 
   /**
@@ -1264,16 +1225,9 @@ export class VaultClient {
    * - vault must not be paused
    * @fires WithdrawEvent
    */
-  async withdraw(
-    signer: StellarSdk.Keypair,
-    user: string,
-    amount: bigint,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-      nativeToScVal(amount, { type: "i128" }),
-    ];
-    return this.invoke<void>("withdraw", args, signer);
+  async withdraw(signer: StellarSdk.Keypair, user: string, amount: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal(), nativeToScVal(amount, { type: 'i128' })];
+    return this.invoke<void>('withdraw', args, signer);
   }
 
   /**
@@ -1281,14 +1235,9 @@ export class VaultClient {
    * @param user
    * @fires WithdrawEvent
    */
-  async withdraw_all(
-    signer: StellarSdk.Keypair,
-    user: string,
-  ): Promise<TxResult<bigint>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-    ];
-    return this.invoke<bigint>("withdraw_all", args, signer);
+  async withdraw_all(signer: StellarSdk.Keypair, user: string): Promise<TxResult<bigint>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal()];
+    return this.invoke<bigint>('withdraw_all', args, signer);
   }
 
   /**
@@ -1297,18 +1246,9 @@ export class VaultClient {
    * @param asset
    * @param amount
    */
-  async deposit_asset(
-    signer: StellarSdk.Keypair,
-    user: string,
-    asset: string,
-    amount: bigint,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-      nativeToScVal(asset, { type: "symbol" }),
-      nativeToScVal(amount, { type: "i128" }),
-    ];
-    return this.invoke<void>("deposit_asset", args, signer);
+  async deposit_asset(signer: StellarSdk.Keypair, user: string, asset: string, amount: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal(), nativeToScVal(asset, { type: 'symbol' }), nativeToScVal(amount, { type: 'i128' })];
+    return this.invoke<void>('deposit_asset', args, signer);
   }
 
   /**
@@ -1317,18 +1257,9 @@ export class VaultClient {
    * @param asset
    * @param amount
    */
-  async withdraw_asset(
-    signer: StellarSdk.Keypair,
-    user: string,
-    asset: string,
-    amount: bigint,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-      nativeToScVal(asset, { type: "symbol" }),
-      nativeToScVal(amount, { type: "i128" }),
-    ];
-    return this.invoke<void>("withdraw_asset", args, signer);
+  async withdraw_asset(signer: StellarSdk.Keypair, user: string, asset: string, amount: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal(), nativeToScVal(asset, { type: 'symbol' }), nativeToScVal(amount, { type: 'i128' })];
+    return this.invoke<void>('withdraw_asset', args, signer);
   }
 
   /**
@@ -1336,48 +1267,27 @@ export class VaultClient {
    * @param user
    * @param asset
    */
-  async get_balance_asset(
-    user: string,
-    asset: string,
-    sourcePublicKey: string,
-  ): Promise<bigint> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-      nativeToScVal(asset, { type: "symbol" }),
-    ];
-    return this.simulate<bigint>("get_balance_asset", args, sourcePublicKey);
+  async get_balance_asset(user: string, asset: string, sourcePublicKey: string): Promise<bigint> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal(), nativeToScVal(asset, { type: 'symbol' })];
+    return this.simulate<bigint>('get_balance_asset', args, sourcePublicKey);
   }
 
   /**
    * Function get_total_assets_by_asset
    * @param asset
    */
-  async get_total_assets_by_asset(
-    asset: string,
-    sourcePublicKey: string,
-  ): Promise<bigint> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(asset, { type: "symbol" }),
-    ];
-    return this.simulate<bigint>(
-      "get_total_assets_by_asset",
-      args,
-      sourcePublicKey,
-    );
+  async get_total_assets_by_asset(asset: string, sourcePublicKey: string): Promise<bigint> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(asset, { type: 'symbol' })];
+    return this.simulate<bigint>('get_total_assets_by_asset', args, sourcePublicKey);
   }
 
   /**
    * Function migrate_shares
    * @param user
    */
-  async migrate_shares(
-    signer: StellarSdk.Keypair,
-    user: string,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-    ];
-    return this.invoke<void>("migrate_shares", args, signer);
+  async migrate_shares(signer: StellarSdk.Keypair, user: string): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal()];
+    return this.invoke<void>('migrate_shares', args, signer);
   }
 
   /**
@@ -1386,46 +1296,27 @@ export class VaultClient {
    * @param shares
    * @param lock_duration_days
    */
-  async lock_shares(
-    signer: StellarSdk.Keypair,
-    user: string,
-    shares: bigint,
-    lock_duration_days: number,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-      nativeToScVal(shares, { type: "i128" }),
-      nativeToScVal(lock_duration_days, { type: "u32" }),
-    ];
-    return this.invoke<void>("lock_shares", args, signer);
+  async lock_shares(signer: StellarSdk.Keypair, user: string, shares: bigint, lock_duration_days: number): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal(), nativeToScVal(shares, { type: 'i128' }), nativeToScVal(lock_duration_days, { type: 'u32' })];
+    return this.invoke<void>('lock_shares', args, signer);
   }
 
   /**
    * Function unlock_shares
    * @param user
    */
-  async unlock_shares(
-    signer: StellarSdk.Keypair,
-    user: string,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-    ];
-    return this.invoke<void>("unlock_shares", args, signer);
+  async unlock_shares(signer: StellarSdk.Keypair, user: string): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal()];
+    return this.invoke<void>('unlock_shares', args, signer);
   }
 
   /**
    * Function get_locked_shares
    * @param user
    */
-  async get_locked_shares(
-    user: string,
-    sourcePublicKey: string,
-  ): Promise<unknown> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-    ];
-    return this.simulate<unknown>("get_locked_shares", args, sourcePublicKey);
+  async get_locked_shares(user: string, sourcePublicKey: string): Promise<unknown> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal()];
+    return this.simulate<unknown>('get_locked_shares', args, sourcePublicKey);
   }
 
   /**
@@ -1433,51 +1324,30 @@ export class VaultClient {
    * @param user
    * @param amount
    */
-  async emergency_withdraw(
-    signer: StellarSdk.Keypair,
-    user: string,
-    amount: bigint,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-      nativeToScVal(amount, { type: "i128" }),
-    ];
-    return this.invoke<void>("emergency_withdraw", args, signer);
+  async emergency_withdraw(signer: StellarSdk.Keypair, user: string, amount: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal(), nativeToScVal(amount, { type: 'i128' })];
+    return this.invoke<void>('emergency_withdraw', args, signer);
   }
 
   /**
    * AI agent rebalances funds between yield protocols
    * @param protocol
    * @param expected_apy
-   * @param min_out Slippage tolerance in basis points, applied per protocol leg.
+   * @param min_out
    * @fires RebalanceEvent
    */
-  async rebalance(
-    signer: StellarSdk.Keypair,
-    protocol: string,
-    expected_apy: bigint,
-    slippage_bps: bigint,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(protocol, { type: "symbol" }),
-      nativeToScVal(expected_apy, { type: "i128" }),
-      nativeToScVal(slippage_bps, { type: "i128" }),
-    ];
-    return this.invoke<void>("rebalance", args, signer);
+  async rebalance(signer: StellarSdk.Keypair, protocol: string, expected_apy: bigint, min_out: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(protocol, { type: 'symbol' }), nativeToScVal(expected_apy, { type: 'i128' }), nativeToScVal(min_out, { type: 'i128' })];
+    return this.invoke<void>('rebalance', args, signer);
   }
 
   /**
    * Function enable_multi_protocol
    * @param enabled
    */
-  async enable_multi_protocol(
-    signer: StellarSdk.Keypair,
-    enabled: boolean,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(enabled, { type: "bool" }),
-    ];
-    return this.invoke<void>("enable_multi_protocol", args, signer);
+  async enable_multi_protocol(signer: StellarSdk.Keypair, enabled: boolean): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(enabled, { type: 'bool' })];
+    return this.invoke<void>('enable_multi_protocol', args, signer);
   }
 
   /**
@@ -1485,11 +1355,7 @@ export class VaultClient {
    */
   async is_multi_protocol_enabled(sourcePublicKey: string): Promise<boolean> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<boolean>(
-      "is_multi_protocol_enabled",
-      args,
-      sourcePublicKey,
-    );
+    return this.simulate<boolean>('is_multi_protocol_enabled', args, sourcePublicKey);
   }
 
   /**
@@ -1497,7 +1363,7 @@ export class VaultClient {
    */
   async get_allocation(sourcePublicKey: string): Promise<unknown> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<unknown>("get_allocation", args, sourcePublicKey);
+    return this.simulate<unknown>('get_allocation', args, sourcePublicKey);
   }
 
   /**
@@ -1505,11 +1371,7 @@ export class VaultClient {
    */
   async get_deployed_to_blend(sourcePublicKey: string): Promise<bigint> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<bigint>(
-      "get_deployed_to_blend",
-      args,
-      sourcePublicKey,
-    );
+    return this.simulate<bigint>('get_deployed_to_blend', args, sourcePublicKey);
   }
 
   /**
@@ -1517,7 +1379,7 @@ export class VaultClient {
    */
   async get_deployed_to_dex(sourcePublicKey: string): Promise<bigint> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<bigint>("get_deployed_to_dex", args, sourcePublicKey);
+    return this.simulate<bigint>('get_deployed_to_dex', args, sourcePublicKey);
   }
 
   /**
@@ -1525,11 +1387,7 @@ export class VaultClient {
    */
   async get_protocol_breakdown(sourcePublicKey: string): Promise<unknown> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<unknown>(
-      "get_protocol_breakdown",
-      args,
-      sourcePublicKey,
-    );
+    return this.simulate<unknown>('get_protocol_breakdown', args, sourcePublicKey);
   }
 
   /**
@@ -1537,30 +1395,18 @@ export class VaultClient {
    * @param protocol
    * @param apy_bps
    */
-  async set_protocol_apy(
-    signer: StellarSdk.Keypair,
-    protocol: string,
-    apy_bps: number,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(protocol, { type: "symbol" }),
-      nativeToScVal(apy_bps, { type: "u32" }),
-    ];
-    return this.invoke<void>("set_protocol_apy", args, signer);
+  async set_protocol_apy(signer: StellarSdk.Keypair, protocol: string, apy_bps: number): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(protocol, { type: 'symbol' }), nativeToScVal(apy_bps, { type: 'u32' })];
+    return this.invoke<void>('set_protocol_apy', args, signer);
   }
 
   /**
    * Function get_protocol_apy
    * @param protocol
    */
-  async get_protocol_apy(
-    protocol: string,
-    sourcePublicKey: string,
-  ): Promise<number> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(protocol, { type: "symbol" }),
-    ];
-    return this.simulate<number>("get_protocol_apy", args, sourcePublicKey);
+  async get_protocol_apy(protocol: string, sourcePublicKey: string): Promise<number> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(protocol, { type: 'symbol' })];
+    return this.simulate<number>('get_protocol_apy', args, sourcePublicKey);
   }
 
   /**
@@ -1568,41 +1414,27 @@ export class VaultClient {
    */
   async get_composite_apy(sourcePublicKey: string): Promise<number> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<number>("get_composite_apy", args, sourcePublicKey);
+    return this.simulate<number>('get_composite_apy', args, sourcePublicKey);
   }
 
   /**
    * Function rebalance_multi
    * @param blend_bps
    * @param dex_bps
-   * @param min_out Slippage tolerance in basis points, applied per venue leg.
+   * @param min_out
    */
-  async rebalance_multi(
-    signer: StellarSdk.Keypair,
-    blend_bps: number,
-    dex_bps: number,
-    slippage_bps: bigint,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(blend_bps, { type: "u32" }),
-      nativeToScVal(dex_bps, { type: "u32" }),
-      nativeToScVal(slippage_bps, { type: "i128" }),
-    ];
-    return this.invoke<void>("rebalance_multi", args, signer);
+  async rebalance_multi(signer: StellarSdk.Keypair, blend_bps: number, dex_bps: number, min_out: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(blend_bps, { type: 'u32' }), nativeToScVal(dex_bps, { type: 'u32' }), nativeToScVal(min_out, { type: 'i128' })];
+    return this.invoke<void>('rebalance_multi', args, signer);
   }
 
   /**
    * Function harvest
-   * @param min_out Slippage tolerance in basis points, applied to withdrawal and supply legs.
+   * @param min_out
    */
-  async harvest(
-    signer: StellarSdk.Keypair,
-    slippage_bps: bigint,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(slippage_bps, { type: "i128" }),
-    ];
-    return this.invoke<void>("harvest", args, signer);
+  async harvest(signer: StellarSdk.Keypair, min_out: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(min_out, { type: 'i128' })];
+    return this.invoke<void>('harvest', args, signer);
   }
 
   /**
@@ -1610,14 +1442,9 @@ export class VaultClient {
    * @param owner
    * @fires VaultPausedEvent
    */
-  async pause(
-    signer: StellarSdk.Keypair,
-    owner: string,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(owner).toScVal(),
-    ];
-    return this.invoke<void>("pause", args, signer);
+  async pause(signer: StellarSdk.Keypair, owner: string): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(owner).toScVal()];
+    return this.invoke<void>('pause', args, signer);
   }
 
   /**
@@ -1625,14 +1452,9 @@ export class VaultClient {
    * @param owner
    * @fires VaultUnpausedEvent
    */
-  async unpause(
-    signer: StellarSdk.Keypair,
-    owner: string,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(owner).toScVal(),
-    ];
-    return this.invoke<void>("unpause", args, signer);
+  async unpause(signer: StellarSdk.Keypair, owner: string): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(owner).toScVal()];
+    return this.invoke<void>('unpause', args, signer);
   }
 
   /**
@@ -1640,70 +1462,45 @@ export class VaultClient {
    * @param owner
    * @fires EmergencyPausedEvent
    */
-  async emergency_pause(
-    signer: StellarSdk.Keypair,
-    owner: string,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(owner).toScVal(),
-    ];
-    return this.invoke<void>("emergency_pause", args, signer);
+  async emergency_pause(signer: StellarSdk.Keypair, owner: string): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(owner).toScVal()];
+    return this.invoke<void>('emergency_pause', args, signer);
   }
 
   /**
    * Function reset_circuit_breaker
    * @param owner
    */
-  async reset_circuit_breaker(
-    signer: StellarSdk.Keypair,
-    owner: string,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(owner).toScVal(),
-    ];
-    return this.invoke<void>("reset_circuit_breaker", args, signer);
+  async reset_circuit_breaker(signer: StellarSdk.Keypair, owner: string): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(owner).toScVal()];
+    return this.invoke<void>('reset_circuit_breaker', args, signer);
   }
 
   /**
    * Function emergency_harvest
    * @param min_out
    */
-  async emergency_harvest(
-    signer: StellarSdk.Keypair,
-    min_out: bigint,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(min_out, { type: "i128" }),
-    ];
-    return this.invoke<void>("emergency_harvest", args, signer);
+  async emergency_harvest(signer: StellarSdk.Keypair, min_out: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(min_out, { type: 'i128' })];
+    return this.invoke<void>('emergency_harvest', args, signer);
   }
 
   /**
    * Function set_migration_target
    * @param target
    */
-  async set_migration_target(
-    signer: StellarSdk.Keypair,
-    target: string,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(target).toScVal(),
-    ];
-    return this.invoke<void>("set_migration_target", args, signer);
+  async set_migration_target(signer: StellarSdk.Keypair, target: string): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(target).toScVal()];
+    return this.invoke<void>('set_migration_target', args, signer);
   }
 
   /**
    * Function set_migration_paused
    * @param paused
    */
-  async set_migration_paused(
-    signer: StellarSdk.Keypair,
-    paused: boolean,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(paused, { type: "bool" }),
-    ];
-    return this.invoke<void>("set_migration_paused", args, signer);
+  async set_migration_paused(signer: StellarSdk.Keypair, paused: boolean): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(paused, { type: 'bool' })];
+    return this.invoke<void>('set_migration_paused', args, signer);
   }
 
   /**
@@ -1711,12 +1508,9 @@ export class VaultClient {
    * @param cap
    * @fires TvlCapUpdatedEvent
    */
-  async set_tvl_cap(
-    signer: StellarSdk.Keypair,
-    cap: bigint,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(cap, { type: "i128" })];
-    return this.invoke<void>("set_tvl_cap", args, signer);
+  async set_tvl_cap(signer: StellarSdk.Keypair, cap: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(cap, { type: 'i128' })];
+    return this.invoke<void>('set_tvl_cap', args, signer);
   }
 
   /**
@@ -1724,12 +1518,9 @@ export class VaultClient {
    * @param cap
    * @fires UserDepositCapUpdatedEvent
    */
-  async set_user_deposit_cap(
-    signer: StellarSdk.Keypair,
-    cap: bigint,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(cap, { type: "i128" })];
-    return this.invoke<void>("set_user_deposit_cap", args, signer);
+  async set_user_deposit_cap(signer: StellarSdk.Keypair, cap: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(cap, { type: 'i128' })];
+    return this.invoke<void>('set_user_deposit_cap', args, signer);
   }
 
   /**
@@ -1738,16 +1529,9 @@ export class VaultClient {
    * @param tvl_cap
    * @fires CapsUpdatedEvent
    */
-  async set_caps(
-    signer: StellarSdk.Keypair,
-    user_deposit_cap: bigint,
-    tvl_cap: bigint,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(user_deposit_cap, { type: "i128" }),
-      nativeToScVal(tvl_cap, { type: "i128" }),
-    ];
-    return this.invoke<void>("set_caps", args, signer);
+  async set_caps(signer: StellarSdk.Keypair, user_deposit_cap: bigint, tvl_cap: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(user_deposit_cap, { type: 'i128' }), nativeToScVal(tvl_cap, { type: 'i128' })];
+    return this.invoke<void>('set_caps', args, signer);
   }
 
   /**
@@ -1756,16 +1540,9 @@ export class VaultClient {
    * @param min
    * @param max
    */
-  async set_limits(
-    signer: StellarSdk.Keypair,
-    min: bigint,
-    max: bigint,
-  ): Promise<TxResult<unknown>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(min, { type: "i128" }),
-      nativeToScVal(max, { type: "i128" }),
-    ];
-    return this.invoke<unknown>("set_limits", args, signer);
+  async set_limits(signer: StellarSdk.Keypair, min: bigint, max: bigint): Promise<TxResult<unknown>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(min, { type: 'i128' }), nativeToScVal(max, { type: 'i128' })];
+    return this.invoke<unknown>('set_limits', args, signer);
   }
 
   /**
@@ -1774,30 +1551,18 @@ export class VaultClient {
    * @param max
    * @fires LimitsUpdatedEvent
    */
-  async set_deposit_limits(
-    signer: StellarSdk.Keypair,
-    min: bigint,
-    max: bigint,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(min, { type: "i128" }),
-      nativeToScVal(max, { type: "i128" }),
-    ];
-    return this.invoke<void>("set_deposit_limits", args, signer);
+  async set_deposit_limits(signer: StellarSdk.Keypair, min: bigint, max: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(min, { type: 'i128' }), nativeToScVal(max, { type: 'i128' })];
+    return this.invoke<void>('set_deposit_limits', args, signer);
   }
 
   /**
    * Set minimum ledgers between rebalance calls (0 = no cooldown)
    * @param interval
    */
-  async set_rebalance_cooldown(
-    signer: StellarSdk.Keypair,
-    interval: number,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(interval, { type: "u32" }),
-    ];
-    return this.invoke<void>("set_rebalance_cooldown", args, signer);
+  async set_rebalance_cooldown(signer: StellarSdk.Keypair, interval: number): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(interval, { type: 'u32' })];
+    return this.invoke<void>('set_rebalance_cooldown', args, signer);
   }
 
   /**
@@ -1805,11 +1570,7 @@ export class VaultClient {
    */
   async get_rebalance_cooldown(sourcePublicKey: string): Promise<number> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<number>(
-      "get_rebalance_cooldown",
-      args,
-      sourcePublicKey,
-    );
+    return this.simulate<number>('get_rebalance_cooldown', args, sourcePublicKey);
   }
 
   /**
@@ -1824,18 +1585,9 @@ export class VaultClient {
    * - unknown categories are rejected
    * @fires RateLimitConfigUpdatedEvent
    */
-  async set_rate_limit(
-    signer: StellarSdk.Keypair,
-    category: string,
-    max_calls: number,
-    window_ledgers: number,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(category, { type: "symbol" }),
-      nativeToScVal(max_calls, { type: "u32" }),
-      nativeToScVal(window_ledgers, { type: "u32" }),
-    ];
-    return this.invoke<void>("set_rate_limit", args, signer);
+  async set_rate_limit(signer: StellarSdk.Keypair, category: string, max_calls: number, window_ledgers: number): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(category, { type: 'symbol' }), nativeToScVal(max_calls, { type: 'u32' }), nativeToScVal(window_ledgers, { type: 'u32' })];
+    return this.invoke<void>('set_rate_limit', args, signer);
   }
 
   /**
@@ -1845,72 +1597,36 @@ export class VaultClient {
    * @param window_ledgers
    * @fires RateLimitConfigUpdatedEvent
    */
-  async set_rate_limit_config(
-    signer: StellarSdk.Keypair,
-    category: string,
-    max_calls: number,
-    window_ledgers: number,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(category, { type: "symbol" }),
-      nativeToScVal(max_calls, { type: "u32" }),
-      nativeToScVal(window_ledgers, { type: "u32" }),
-    ];
-    return this.invoke<void>("set_rate_limit_config", args, signer);
+  async set_rate_limit_config(signer: StellarSdk.Keypair, category: string, max_calls: number, window_ledgers: number): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(category, { type: 'symbol' }), nativeToScVal(max_calls, { type: 'u32' }), nativeToScVal(window_ledgers, { type: 'u32' })];
+    return this.invoke<void>('set_rate_limit_config', args, signer);
   }
 
   /**
    * Get the configured rate-limit allowance for a category
    * @param category
    */
-  async get_rate_limit(
-    category: string,
-    sourcePublicKey: string,
-  ): Promise<RateLimitConfig> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(category, { type: "symbol" }),
-    ];
-    return this.simulate<RateLimitConfig>(
-      "get_rate_limit",
-      args,
-      sourcePublicKey,
-    );
+  async get_rate_limit(category: string, sourcePublicKey: string): Promise<RateLimitConfig> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(category, { type: 'symbol' })];
+    return this.simulate<RateLimitConfig>('get_rate_limit', args, sourcePublicKey);
   }
 
   /**
    * Get the configured rate-limit allowance for a category
    * @param category
    */
-  async get_rate_limit_config(
-    category: string,
-    sourcePublicKey: string,
-  ): Promise<RateLimitConfig> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(category, { type: "symbol" }),
-    ];
-    return this.simulate<RateLimitConfig>(
-      "get_rate_limit_config",
-      args,
-      sourcePublicKey,
-    );
+  async get_rate_limit_config(category: string, sourcePublicKey: string): Promise<RateLimitConfig> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(category, { type: 'symbol' })];
+    return this.simulate<RateLimitConfig>('get_rate_limit_config', args, sourcePublicKey);
   }
 
   /**
    * Get the current global rate-limit usage bucket
    * @param category
    */
-  async get_global_rate_limit_state(
-    category: string,
-    sourcePublicKey: string,
-  ): Promise<RateLimitState> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(category, { type: "symbol" }),
-    ];
-    return this.simulate<RateLimitState>(
-      "get_global_rate_limit_state",
-      args,
-      sourcePublicKey,
-    );
+  async get_global_rate_limit_state(category: string, sourcePublicKey: string): Promise<RateLimitState> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(category, { type: 'symbol' })];
+    return this.simulate<RateLimitState>('get_global_rate_limit_state', args, sourcePublicKey);
   }
 
   /**
@@ -1918,20 +1634,9 @@ export class VaultClient {
    * @param user
    * @param category
    */
-  async get_user_rate_limit_state(
-    user: string,
-    category: string,
-    sourcePublicKey: string,
-  ): Promise<RateLimitState> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-      nativeToScVal(category, { type: "symbol" }),
-    ];
-    return this.simulate<RateLimitState>(
-      "get_user_rate_limit_state",
-      args,
-      sourcePublicKey,
-    );
+  async get_user_rate_limit_state(user: string, category: string, sourcePublicKey: string): Promise<RateLimitState> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal(), nativeToScVal(category, { type: 'symbol' })];
+    return this.simulate<RateLimitState>('get_user_rate_limit_state', args, sourcePublicKey);
   }
 
   /**
@@ -1939,14 +1644,9 @@ export class VaultClient {
    * @param max_entries
    * @fires BatchSizeLimitUpdatedEvent
    */
-  async set_max_batch_size(
-    signer: StellarSdk.Keypair,
-    max_entries: number,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(max_entries, { type: "u32" }),
-    ];
-    return this.invoke<void>("set_max_batch_size", args, signer);
+  async set_max_batch_size(signer: StellarSdk.Keypair, max_entries: number): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(max_entries, { type: 'u32' })];
+    return this.invoke<void>('set_max_batch_size', args, signer);
   }
 
   /**
@@ -1954,7 +1654,7 @@ export class VaultClient {
    */
   async get_max_batch_size(sourcePublicKey: string): Promise<number> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<number>("get_max_batch_size", args, sourcePublicKey);
+    return this.simulate<number>('get_max_batch_size', args, sourcePublicKey);
   }
 
   /**
@@ -1962,14 +1662,9 @@ export class VaultClient {
    * @param max_entries
    * @fires BatchSizeLimitUpdatedEvent
    */
-  async set_batch_size_limit(
-    signer: StellarSdk.Keypair,
-    max_entries: number,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(max_entries, { type: "u32" }),
-    ];
-    return this.invoke<void>("set_batch_size_limit", args, signer);
+  async set_batch_size_limit(signer: StellarSdk.Keypair, max_entries: number): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(max_entries, { type: 'u32' })];
+    return this.invoke<void>('set_batch_size_limit', args, signer);
   }
 
   /**
@@ -1977,21 +1672,16 @@ export class VaultClient {
    */
   async get_batch_size_limit(sourcePublicKey: string): Promise<number> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<number>("get_batch_size_limit", args, sourcePublicKey);
+    return this.simulate<number>('get_batch_size_limit', args, sourcePublicKey);
   }
 
   /**
    * Function set_min_holding_period
    * @param ledgers
    */
-  async set_min_holding_period(
-    signer: StellarSdk.Keypair,
-    ledgers: number,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(ledgers, { type: "u32" }),
-    ];
-    return this.invoke<void>("set_min_holding_period", args, signer);
+  async set_min_holding_period(signer: StellarSdk.Keypair, ledgers: number): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(ledgers, { type: 'u32' })];
+    return this.invoke<void>('set_min_holding_period', args, signer);
   }
 
   /**
@@ -1999,11 +1689,7 @@ export class VaultClient {
    */
   async get_min_holding_period(sourcePublicKey: string): Promise<number> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<number>(
-      "get_min_holding_period",
-      args,
-      sourcePublicKey,
-    );
+    return this.simulate<number>('get_min_holding_period', args, sourcePublicKey);
   }
 
   /**
@@ -2012,18 +1698,9 @@ export class VaultClient {
    * @param estimated_loss_stroops
    * @param min_out_used
    */
-  async submit_mev_report(
-    signer: StellarSdk.Keypair,
-    protocol: string,
-    estimated_loss_stroops: bigint,
-    min_out_used: bigint,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(protocol, { type: "symbol" }),
-      nativeToScVal(estimated_loss_stroops, { type: "i128" }),
-      nativeToScVal(min_out_used, { type: "i128" }),
-    ];
-    return this.invoke<void>("submit_mev_report", args, signer);
+  async submit_mev_report(signer: StellarSdk.Keypair, protocol: string, estimated_loss_stroops: bigint, min_out_used: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(protocol, { type: 'symbol' }), nativeToScVal(estimated_loss_stroops, { type: 'i128' }), nativeToScVal(min_out_used, { type: 'i128' })];
+    return this.invoke<void>('submit_mev_report', args, signer);
   }
 
   /**
@@ -2031,51 +1708,34 @@ export class VaultClient {
    */
   async get_mev_stats(sourcePublicKey: string): Promise<unknown> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<unknown>("get_mev_stats", args, sourcePublicKey);
+    return this.simulate<unknown>('get_mev_stats', args, sourcePublicKey);
   }
 
   /**
    * Function set_max_acceptable_mev_loss
    * @param max_loss_stroops
    */
-  async set_max_acceptable_mev_loss(
-    signer: StellarSdk.Keypair,
-    max_loss_stroops: bigint,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(max_loss_stroops, { type: "i128" }),
-    ];
-    return this.invoke<void>("set_max_acceptable_mev_loss", args, signer);
+  async set_max_acceptable_mev_loss(signer: StellarSdk.Keypair, max_loss_stroops: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(max_loss_stroops, { type: 'i128' })];
+    return this.invoke<void>('set_max_acceptable_mev_loss', args, signer);
   }
 
   /**
    * Function submit_apy_prediction
    * @param prediction
    */
-  async submit_apy_prediction(
-    signer: StellarSdk.Keypair,
-    prediction: unknown,
-  ): Promise<TxResult<void>> {
+  async submit_apy_prediction(signer: StellarSdk.Keypair, prediction: unknown): Promise<TxResult<void>> {
     const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(prediction)];
-    return this.invoke<void>("submit_apy_prediction", args, signer);
+    return this.invoke<void>('submit_apy_prediction', args, signer);
   }
 
   /**
    * Function get_apy_prediction
    * @param protocol
    */
-  async get_apy_prediction(
-    protocol: string,
-    sourcePublicKey: string,
-  ): Promise<unknown | null> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(protocol, { type: "symbol" }),
-    ];
-    return this.simulate<unknown | null>(
-      "get_apy_prediction",
-      args,
-      sourcePublicKey,
-    );
+  async get_apy_prediction(protocol: string, sourcePublicKey: string): Promise<unknown | null> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(protocol, { type: 'symbol' })];
+    return this.simulate<unknown | null>('get_apy_prediction', args, sourcePublicKey);
   }
 
   /**
@@ -2083,25 +1743,16 @@ export class VaultClient {
    */
   async get_last_rebalance_ledger(sourcePublicKey: string): Promise<number> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<number>(
-      "get_last_rebalance_ledger",
-      args,
-      sourcePublicKey,
-    );
+    return this.simulate<number>('get_last_rebalance_ledger', args, sourcePublicKey);
   }
 
   /**
    * Function set_max_consecutive_failures
    * @param threshold
    */
-  async set_max_consecutive_failures(
-    signer: StellarSdk.Keypair,
-    threshold: number,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(threshold, { type: "u32" }),
-    ];
-    return this.invoke<void>("set_max_consecutive_failures", args, signer);
+  async set_max_consecutive_failures(signer: StellarSdk.Keypair, threshold: number): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(threshold, { type: 'u32' })];
+    return this.invoke<void>('set_max_consecutive_failures', args, signer);
   }
 
   /**
@@ -2109,11 +1760,7 @@ export class VaultClient {
    */
   async get_max_consecutive_failures(sourcePublicKey: string): Promise<number> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<number>(
-      "get_max_consecutive_failures",
-      args,
-      sourcePublicKey,
-    );
+    return this.simulate<number>('get_max_consecutive_failures', args, sourcePublicKey);
   }
 
   /**
@@ -2121,23 +1768,16 @@ export class VaultClient {
    */
   async get_consecutive_failures(sourcePublicKey: string): Promise<number> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<number>(
-      "get_consecutive_failures",
-      args,
-      sourcePublicKey,
-    );
+    return this.simulate<number>('get_consecutive_failures', args, sourcePublicKey);
   }
 
   /**
    * Set the ledger TTL for token approvals (alias for set_blend_approval_ttl)
    * @param ttl
    */
-  async set_approval_ttl(
-    signer: StellarSdk.Keypair,
-    ttl: number,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(ttl, { type: "u32" })];
-    return this.invoke<void>("set_approval_ttl", args, signer);
+  async set_approval_ttl(signer: StellarSdk.Keypair, ttl: number): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(ttl, { type: 'u32' })];
+    return this.invoke<void>('set_approval_ttl', args, signer);
   }
 
   /**
@@ -2145,7 +1785,7 @@ export class VaultClient {
    */
   async get_approval_ttl(sourcePublicKey: string): Promise<number> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<number>("get_approval_ttl", args, sourcePublicKey);
+    return this.simulate<number>('get_approval_ttl', args, sourcePublicKey);
   }
 
   /**
@@ -2153,7 +1793,7 @@ export class VaultClient {
    */
   async get_tvl_cap(sourcePublicKey: string): Promise<bigint> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<bigint>("get_tvl_cap", args, sourcePublicKey);
+    return this.simulate<bigint>('get_tvl_cap', args, sourcePublicKey);
   }
 
   /**
@@ -2161,7 +1801,7 @@ export class VaultClient {
    */
   async get_user_deposit_cap(sourcePublicKey: string): Promise<bigint> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<bigint>("get_user_deposit_cap", args, sourcePublicKey);
+    return this.simulate<bigint>('get_user_deposit_cap', args, sourcePublicKey);
   }
 
   /**
@@ -2169,7 +1809,7 @@ export class VaultClient {
    */
   async get_min_deposit(sourcePublicKey: string): Promise<bigint> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<bigint>("get_min_deposit", args, sourcePublicKey);
+    return this.simulate<bigint>('get_min_deposit', args, sourcePublicKey);
   }
 
   /**
@@ -2177,7 +1817,7 @@ export class VaultClient {
    */
   async get_max_deposit(sourcePublicKey: string): Promise<bigint> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<bigint>("get_max_deposit", args, sourcePublicKey);
+    return this.simulate<bigint>('get_max_deposit', args, sourcePublicKey);
   }
 
   /**
@@ -2186,30 +1826,18 @@ export class VaultClient {
    * @param strategy
    * @fires UserStrategyUpdatedEvent
    */
-  async set_user_strategy(
-    signer: StellarSdk.Keypair,
-    user: string,
-    strategy: string,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-      nativeToScVal(strategy, { type: "symbol" }),
-    ];
-    return this.invoke<void>("set_user_strategy", args, signer);
+  async set_user_strategy(signer: StellarSdk.Keypair, user: string, strategy: string): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal(), nativeToScVal(strategy, { type: 'symbol' })];
+    return this.invoke<void>('set_user_strategy', args, signer);
   }
 
   /**
    * Get a user's strategy choice
    * @param user
    */
-  async get_user_strategy(
-    user: string,
-    sourcePublicKey: string,
-  ): Promise<string> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-    ];
-    return this.simulate<string>("get_user_strategy", args, sourcePublicKey);
+  async get_user_strategy(user: string, sourcePublicKey: string): Promise<string> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal()];
+    return this.simulate<string>('get_user_strategy', args, sourcePublicKey);
   }
 
   /**
@@ -2217,50 +1845,35 @@ export class VaultClient {
    * @param new_agent
    * @fires AgentUpdatedEvent
    */
-  async update_agent(
-    signer: StellarSdk.Keypair,
-    new_agent: string,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(new_agent).toScVal(),
-    ];
-    return this.invoke<void>("update_agent", args, signer);
+  async update_agent(signer: StellarSdk.Keypair, new_agent: string): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(new_agent).toScVal()];
+    return this.invoke<void>('update_agent', args, signer);
   }
 
   /**
    * Confirm a proposed agent update after the timelock has elapsed
    * @fires AgentUpdateConfirmedEvent, AgentUpdatedEvent
    */
-  async confirm_agent_update(
-    signer: StellarSdk.Keypair,
-  ): Promise<TxResult<void>> {
+  async confirm_agent_update(signer: StellarSdk.Keypair): Promise<TxResult<void>> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.invoke<void>("confirm_agent_update", args, signer);
+    return this.invoke<void>('confirm_agent_update', args, signer);
   }
 
   /**
    * Cancel a pending proposed agent update
    * @fires AgentUpdateCancelledEvent
    */
-  async cancel_agent_update(
-    signer: StellarSdk.Keypair,
-  ): Promise<TxResult<void>> {
+  async cancel_agent_update(signer: StellarSdk.Keypair): Promise<TxResult<void>> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.invoke<void>("cancel_agent_update", args, signer);
+    return this.invoke<void>('cancel_agent_update', args, signer);
   }
 
   /**
    * Get the pending proposed agent address and effective ledger
    */
-  async get_pending_agent_update(
-    sourcePublicKey: string,
-  ): Promise<unknown | null> {
+  async get_pending_agent_update(sourcePublicKey: string): Promise<unknown | null> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<unknown | null>(
-      "get_pending_agent_update",
-      args,
-      sourcePublicKey,
-    );
+    return this.simulate<unknown | null>('get_pending_agent_update', args, sourcePublicKey);
   }
 
   /**
@@ -2268,35 +1881,24 @@ export class VaultClient {
    */
   async get_standby_agent(sourcePublicKey: string): Promise<string | null> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<string | null>(
-      "get_standby_agent",
-      args,
-      sourcePublicKey,
-    );
+    return this.simulate<string | null>('get_standby_agent', args, sourcePublicKey);
   }
 
   /**
    * Function update_standby_agent
    * @param new_standby
    */
-  async update_standby_agent(
-    signer: StellarSdk.Keypair,
-    new_standby: string,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(new_standby).toScVal(),
-    ];
-    return this.invoke<void>("update_standby_agent", args, signer);
+  async update_standby_agent(signer: StellarSdk.Keypair, new_standby: string): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(new_standby).toScVal()];
+    return this.invoke<void>('update_standby_agent', args, signer);
   }
 
   /**
    * Function switch_to_standby_agent
    */
-  async switch_to_standby_agent(
-    signer: StellarSdk.Keypair,
-  ): Promise<TxResult<void>> {
+  async switch_to_standby_agent(signer: StellarSdk.Keypair): Promise<TxResult<void>> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.invoke<void>("switch_to_standby_agent", args, signer);
+    return this.invoke<void>('switch_to_standby_agent', args, signer);
   }
 
   /**
@@ -2307,22 +1909,9 @@ export class VaultClient {
    * @param deposit_limit
    * @param tvl_cap
    */
-  async add_supported_asset(
-    signer: StellarSdk.Keypair,
-    asset: string,
-    token_address: string,
-    min_deposit: bigint,
-    deposit_limit: bigint,
-    tvl_cap: bigint,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(asset, { type: "symbol" }),
-      new StellarSdk.Address(token_address).toScVal(),
-      nativeToScVal(min_deposit, { type: "i128" }),
-      nativeToScVal(deposit_limit, { type: "i128" }),
-      nativeToScVal(tvl_cap, { type: "i128" }),
-    ];
-    return this.invoke<void>("add_supported_asset", args, signer);
+  async add_supported_asset(signer: StellarSdk.Keypair, asset: string, token_address: string, min_deposit: bigint, deposit_limit: bigint, tvl_cap: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(asset, { type: 'symbol' }), new StellarSdk.Address(token_address).toScVal(), nativeToScVal(min_deposit, { type: 'i128' }), nativeToScVal(deposit_limit, { type: 'i128' }), nativeToScVal(tvl_cap, { type: 'i128' })];
+    return this.invoke<void>('add_supported_asset', args, signer);
   }
 
   /**
@@ -2332,34 +1921,18 @@ export class VaultClient {
    * @param deposit_limit
    * @param tvl_cap
    */
-  async update_asset_limits(
-    signer: StellarSdk.Keypair,
-    asset: string,
-    min_deposit: bigint,
-    deposit_limit: bigint,
-    tvl_cap: bigint,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(asset, { type: "symbol" }),
-      nativeToScVal(min_deposit, { type: "i128" }),
-      nativeToScVal(deposit_limit, { type: "i128" }),
-      nativeToScVal(tvl_cap, { type: "i128" }),
-    ];
-    return this.invoke<void>("update_asset_limits", args, signer);
+  async update_asset_limits(signer: StellarSdk.Keypair, asset: string, min_deposit: bigint, deposit_limit: bigint, tvl_cap: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(asset, { type: 'symbol' }), nativeToScVal(min_deposit, { type: 'i128' }), nativeToScVal(deposit_limit, { type: 'i128' }), nativeToScVal(tvl_cap, { type: 'i128' })];
+    return this.invoke<void>('update_asset_limits', args, signer);
   }
 
   /**
    * Function remove_supported_asset
    * @param asset
    */
-  async remove_supported_asset(
-    signer: StellarSdk.Keypair,
-    asset: string,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(asset, { type: "symbol" }),
-    ];
-    return this.invoke<void>("remove_supported_asset", args, signer);
+  async remove_supported_asset(signer: StellarSdk.Keypair, asset: string): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(asset, { type: 'symbol' })];
+    return this.invoke<void>('remove_supported_asset', args, signer);
   }
 
   /**
@@ -2367,57 +1940,34 @@ export class VaultClient {
    */
   async get_supported_assets(sourcePublicKey: string): Promise<unknown> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<unknown>(
-      "get_supported_assets",
-      args,
-      sourcePublicKey,
-    );
+    return this.simulate<unknown>('get_supported_assets', args, sourcePublicKey);
   }
 
   /**
    * Function get_asset_config
    * @param asset
    */
-  async get_asset_config(
-    asset: string,
-    sourcePublicKey: string,
-  ): Promise<unknown | null> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(asset, { type: "symbol" }),
-    ];
-    return this.simulate<unknown | null>(
-      "get_asset_config",
-      args,
-      sourcePublicKey,
-    );
+  async get_asset_config(asset: string, sourcePublicKey: string): Promise<unknown | null> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(asset, { type: 'symbol' })];
+    return this.simulate<unknown | null>('get_asset_config', args, sourcePublicKey);
   }
 
   /**
    * Function get_asset_tvl_cap
    * @param asset
    */
-  async get_asset_tvl_cap(
-    asset: string,
-    sourcePublicKey: string,
-  ): Promise<bigint> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(asset, { type: "symbol" }),
-    ];
-    return this.simulate<bigint>("get_asset_tvl_cap", args, sourcePublicKey);
+  async get_asset_tvl_cap(asset: string, sourcePublicKey: string): Promise<bigint> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(asset, { type: 'symbol' })];
+    return this.simulate<bigint>('get_asset_tvl_cap', args, sourcePublicKey);
   }
 
   /**
    * Function get_asset_totals
    * @param asset
    */
-  async get_asset_totals(
-    asset: string,
-    sourcePublicKey: string,
-  ): Promise<unknown> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(asset, { type: "symbol" }),
-    ];
-    return this.simulate<unknown>("get_asset_totals", args, sourcePublicKey);
+  async get_asset_totals(asset: string, sourcePublicKey: string): Promise<unknown> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(asset, { type: 'symbol' })];
+    return this.simulate<unknown>('get_asset_totals', args, sourcePublicKey);
   }
 
   /**
@@ -2425,16 +1975,9 @@ export class VaultClient {
    * @param user
    * @param asset
    */
-  async get_asset_balance(
-    user: string,
-    asset: string,
-    sourcePublicKey: string,
-  ): Promise<unknown> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-      nativeToScVal(asset, { type: "symbol" }),
-    ];
-    return this.simulate<unknown>("get_asset_balance", args, sourcePublicKey);
+  async get_asset_balance(user: string, asset: string, sourcePublicKey: string): Promise<unknown> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal(), nativeToScVal(asset, { type: 'symbol' })];
+    return this.simulate<unknown>('get_asset_balance', args, sourcePublicKey);
   }
 
   /**
@@ -2443,16 +1986,9 @@ export class VaultClient {
    * @param pool_address
    * @fires BlendPoolConfiguredEvent
    */
-  async set_blend_pool(
-    signer: StellarSdk.Keypair,
-    owner: string,
-    pool_address: string,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(owner).toScVal(),
-      new StellarSdk.Address(pool_address).toScVal(),
-    ];
-    return this.invoke<void>("set_blend_pool", args, signer);
+  async set_blend_pool(signer: StellarSdk.Keypair, owner: string, pool_address: string): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(owner).toScVal(), new StellarSdk.Address(pool_address).toScVal()];
+    return this.invoke<void>('set_blend_pool', args, signer);
   }
 
   /**
@@ -2461,16 +1997,9 @@ export class VaultClient {
    * @param pool_address
    * @fires DexPoolConfiguredEvent
    */
-  async set_dex_pool(
-    signer: StellarSdk.Keypair,
-    owner: string,
-    pool_address: string,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(owner).toScVal(),
-      new StellarSdk.Address(pool_address).toScVal(),
-    ];
-    return this.invoke<void>("set_dex_pool", args, signer);
+  async set_dex_pool(signer: StellarSdk.Keypair, owner: string, pool_address: string): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(owner).toScVal(), new StellarSdk.Address(pool_address).toScVal()];
+    return this.invoke<void>('set_dex_pool', args, signer);
   }
 
   /**
@@ -2478,16 +2007,9 @@ export class VaultClient {
    * @param owner
    * @param blend_approval_ttl
    */
-  async set_blend_approval_ttl(
-    signer: StellarSdk.Keypair,
-    owner: string,
-    blend_approval_ttl: number,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(owner).toScVal(),
-      nativeToScVal(blend_approval_ttl, { type: "u32" }),
-    ];
-    return this.invoke<void>("set_blend_approval_ttl", args, signer);
+  async set_blend_approval_ttl(signer: StellarSdk.Keypair, owner: string, blend_approval_ttl: number): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(owner).toScVal(), nativeToScVal(blend_approval_ttl, { type: 'u32' })];
+    return this.invoke<void>('set_blend_approval_ttl', args, signer);
   }
 
   /**
@@ -2495,14 +2017,9 @@ export class VaultClient {
    * @param new_owner
    * @fires OwnershipTransferInitiatedEvent
    */
-  async transfer_ownership(
-    signer: StellarSdk.Keypair,
-    new_owner: string,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(new_owner).toScVal(),
-    ];
-    return this.invoke<void>("transfer_ownership", args, signer);
+  async transfer_ownership(signer: StellarSdk.Keypair, new_owner: string): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(new_owner).toScVal()];
+    return this.invoke<void>('transfer_ownership', args, signer);
   }
 
   /**
@@ -2510,25 +2027,18 @@ export class VaultClient {
    * @param new_owner
    * @fires OwnershipTransferredEvent
    */
-  async accept_ownership(
-    signer: StellarSdk.Keypair,
-    new_owner: string,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(new_owner).toScVal(),
-    ];
-    return this.invoke<void>("accept_ownership", args, signer);
+  async accept_ownership(signer: StellarSdk.Keypair, new_owner: string): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(new_owner).toScVal()];
+    return this.invoke<void>('accept_ownership', args, signer);
   }
 
   /**
    * Cancel a pending ownership transfer
    * @fires OwnershipTransferCancelledEvent
    */
-  async cancel_ownership_transfer(
-    signer: StellarSdk.Keypair,
-  ): Promise<TxResult<void>> {
+  async cancel_ownership_transfer(signer: StellarSdk.Keypair): Promise<TxResult<void>> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.invoke<void>("cancel_ownership_transfer", args, signer);
+    return this.invoke<void>('cancel_ownership_transfer', args, signer);
   }
 
   /**
@@ -2536,25 +2046,15 @@ export class VaultClient {
    */
   async get_pending_owner(sourcePublicKey: string): Promise<string | null> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<string | null>(
-      "get_pending_owner",
-      args,
-      sourcePublicKey,
-    );
+    return this.simulate<string | null>('get_pending_owner', args, sourcePublicKey);
   }
 
   /**
    * Function get_pending_ownership
    */
-  async get_pending_ownership(
-    sourcePublicKey: string,
-  ): Promise<unknown | null> {
+  async get_pending_ownership(sourcePublicKey: string): Promise<unknown | null> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<unknown | null>(
-      "get_pending_ownership",
-      args,
-      sourcePublicKey,
-    );
+    return this.simulate<unknown | null>('get_pending_ownership', args, sourcePublicKey);
   }
 
   /**
@@ -2565,20 +2065,9 @@ export class VaultClient {
    * @param max_decrease_bps
    * @fires AssetsUpdatedEvent
    */
-  async update_total_assets(
-    signer: StellarSdk.Keypair,
-    agent: string,
-    new_total: bigint,
-    allow_decrease: boolean,
-    max_decrease_bps: number,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(agent).toScVal(),
-      nativeToScVal(new_total, { type: "i128" }),
-      nativeToScVal(allow_decrease, { type: "bool" }),
-      nativeToScVal(max_decrease_bps, { type: "u32" }),
-    ];
-    return this.invoke<void>("update_total_assets", args, signer);
+  async update_total_assets(signer: StellarSdk.Keypair, agent: string, new_total: bigint, allow_decrease: boolean, max_decrease_bps: number): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(agent).toScVal(), nativeToScVal(new_total, { type: 'i128' }), nativeToScVal(allow_decrease, { type: 'bool' }), nativeToScVal(max_decrease_bps, { type: 'u32' })];
+    return this.invoke<void>('update_total_assets', args, signer);
   }
 
   /**
@@ -2587,16 +2076,9 @@ export class VaultClient {
    * @param new_wasm_hash
    * @fires UpgradeScheduledEvent
    */
-  async schedule_upgrade(
-    signer: StellarSdk.Keypair,
-    owner: string,
-    new_wasm_hash: Uint8Array,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(owner).toScVal(),
-      nativeToScVal(new_wasm_hash, { type: "bytes" }),
-    ];
-    return this.invoke<void>("schedule_upgrade", args, signer);
+  async schedule_upgrade(signer: StellarSdk.Keypair, owner: string, new_wasm_hash: Uint8Array): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(owner).toScVal(), nativeToScVal(new_wasm_hash, { type: 'bytes' })];
+    return this.invoke<void>('schedule_upgrade', args, signer);
   }
 
   /**
@@ -2604,14 +2086,9 @@ export class VaultClient {
    * @param owner
    * @fires UpgradedEvent
    */
-  async execute_upgrade(
-    signer: StellarSdk.Keypair,
-    owner: string,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(owner).toScVal(),
-    ];
-    return this.invoke<void>("execute_upgrade", args, signer);
+  async execute_upgrade(signer: StellarSdk.Keypair, owner: string): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(owner).toScVal()];
+    return this.invoke<void>('execute_upgrade', args, signer);
   }
 
   /**
@@ -2619,14 +2096,9 @@ export class VaultClient {
    * @param owner
    * @fires UpgradeCancelledEvent
    */
-  async cancel_upgrade(
-    signer: StellarSdk.Keypair,
-    owner: string,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(owner).toScVal(),
-    ];
-    return this.invoke<void>("cancel_upgrade", args, signer);
+  async cancel_upgrade(signer: StellarSdk.Keypair, owner: string): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(owner).toScVal()];
+    return this.invoke<void>('cancel_upgrade', args, signer);
   }
 
   /**
@@ -2634,11 +2106,7 @@ export class VaultClient {
    */
   async get_pending_upgrade(sourcePublicKey: string): Promise<unknown | null> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<unknown | null>(
-      "get_pending_upgrade",
-      args,
-      sourcePublicKey,
-    );
+    return this.simulate<unknown | null>('get_pending_upgrade', args, sourcePublicKey);
   }
 
   /**
@@ -2646,10 +2114,8 @@ export class VaultClient {
    * @param user
    */
   async get_balance(user: string, sourcePublicKey: string): Promise<bigint> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-    ];
-    return this.simulate<bigint>("get_balance", args, sourcePublicKey);
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal()];
+    return this.simulate<bigint>('get_balance', args, sourcePublicKey);
   }
 
   /**
@@ -2657,7 +2123,7 @@ export class VaultClient {
    */
   async get_total_deposits(sourcePublicKey: string): Promise<bigint> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<bigint>("get_total_deposits", args, sourcePublicKey);
+    return this.simulate<bigint>('get_total_deposits', args, sourcePublicKey);
   }
 
   /**
@@ -2665,7 +2131,7 @@ export class VaultClient {
    */
   async get_total_assets(sourcePublicKey: string): Promise<bigint> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<bigint>("get_total_assets", args, sourcePublicKey);
+    return this.simulate<bigint>('get_total_assets', args, sourcePublicKey);
   }
 
   /**
@@ -2673,7 +2139,7 @@ export class VaultClient {
    */
   async get_total_shares(sourcePublicKey: string): Promise<bigint> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<bigint>("get_total_shares", args, sourcePublicKey);
+    return this.simulate<bigint>('get_total_shares', args, sourcePublicKey);
   }
 
   /**
@@ -2681,10 +2147,8 @@ export class VaultClient {
    * @param user
    */
   async get_shares(user: string, sourcePublicKey: string): Promise<bigint> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-    ];
-    return this.simulate<bigint>("get_shares", args, sourcePublicKey);
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal()];
+    return this.simulate<bigint>('get_shares', args, sourcePublicKey);
   }
 
   /**
@@ -2692,118 +2156,72 @@ export class VaultClient {
    * @param start
    * @param limit
    */
-  async get_users_with_shares(
-    start: number,
-    limit: number,
-    sourcePublicKey: string,
-  ): Promise<unknown> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(start, { type: "u32" }),
-      nativeToScVal(limit, { type: "u32" }),
-    ];
-    return this.simulate<unknown>(
-      "get_users_with_shares",
-      args,
-      sourcePublicKey,
-    );
+  async get_users_with_shares(start: number, limit: number, sourcePublicKey: string): Promise<unknown> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(start, { type: 'u32' }), nativeToScVal(limit, { type: 'u32' })];
+    return this.simulate<unknown>('get_users_with_shares', args, sourcePublicKey);
   }
 
   /**
    * Extend persistent TTL for user shares entry with a per-user rate limit
    * @param user
    */
-  async touch_user_ttl(
-    signer: StellarSdk.Keypair,
-    user: string,
-  ): Promise<TxResult<boolean>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-    ];
-    return this.invoke<boolean>("touch_user_ttl", args, signer);
+  async touch_user_ttl(signer: StellarSdk.Keypair, user: string): Promise<TxResult<boolean>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal()];
+    return this.invoke<boolean>('touch_user_ttl', args, signer);
   }
 
   /**
    * Get complete user information and statistics
    * @param user
    */
-  async get_user_info(
-    user: string,
-    sourcePublicKey: string,
-  ): Promise<UserInfo> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-    ];
-    return this.simulate<UserInfo>("get_user_info", args, sourcePublicKey);
+  async get_user_info(user: string, sourcePublicKey: string): Promise<UserInfo> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal()];
+    return this.simulate<UserInfo>('get_user_info', args, sourcePublicKey);
   }
 
   /**
    * Preview shares minted for asset amount (floor), subject to the global preview rate limit
    * @param assets
    */
-  async preview_deposit_to_shares(
-    signer: StellarSdk.Keypair,
-    assets: bigint,
-  ): Promise<TxResult<bigint>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(assets, { type: "i128" }),
-    ];
-    return this.invoke<bigint>("preview_deposit_to_shares", args, signer);
+  async preview_deposit_to_shares(signer: StellarSdk.Keypair, assets: bigint): Promise<TxResult<bigint>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(assets, { type: 'i128' })];
+    return this.invoke<bigint>('preview_deposit_to_shares', args, signer);
   }
 
   /**
    * Preview assets returned for share amount (floor), subject to the global preview rate limit
    * @param shares
    */
-  async preview_shares_to_assets(
-    signer: StellarSdk.Keypair,
-    shares: bigint,
-  ): Promise<TxResult<bigint>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(shares, { type: "i128" }),
-    ];
-    return this.invoke<bigint>("preview_shares_to_assets", args, signer);
+  async preview_shares_to_assets(signer: StellarSdk.Keypair, shares: bigint): Promise<TxResult<bigint>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(shares, { type: 'i128' })];
+    return this.invoke<bigint>('preview_shares_to_assets', args, signer);
   }
 
   /**
    * Preview shares burned for withdrawal amount (ceil), subject to the global preview rate limit
    * @param assets
    */
-  async preview_withdraw(
-    signer: StellarSdk.Keypair,
-    assets: bigint,
-  ): Promise<TxResult<bigint>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(assets, { type: "i128" }),
-    ];
-    return this.invoke<bigint>("preview_withdraw", args, signer);
+  async preview_withdraw(signer: StellarSdk.Keypair, assets: bigint): Promise<TxResult<bigint>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(assets, { type: 'i128' })];
+    return this.invoke<bigint>('preview_withdraw', args, signer);
   }
 
   /**
    * Convert asset amount to shares (floor), subject to the global preview rate limit
    * @param assets
    */
-  async convert_to_shares(
-    signer: StellarSdk.Keypair,
-    assets: bigint,
-  ): Promise<TxResult<bigint>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(assets, { type: "i128" }),
-    ];
-    return this.invoke<bigint>("convert_to_shares", args, signer);
+  async convert_to_shares(signer: StellarSdk.Keypair, assets: bigint): Promise<TxResult<bigint>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(assets, { type: 'i128' })];
+    return this.invoke<bigint>('convert_to_shares', args, signer);
   }
 
   /**
    * Convert share amount to assets (floor), subject to the global preview rate limit
    * @param shares
    */
-  async convert_to_assets(
-    signer: StellarSdk.Keypair,
-    shares: bigint,
-  ): Promise<TxResult<bigint>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(shares, { type: "i128" }),
-    ];
-    return this.invoke<bigint>("convert_to_assets", args, signer);
+  async convert_to_assets(signer: StellarSdk.Keypair, shares: bigint): Promise<TxResult<bigint>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(shares, { type: 'i128' })];
+    return this.invoke<bigint>('convert_to_assets', args, signer);
   }
 
   /**
@@ -2811,10 +2229,8 @@ export class VaultClient {
    * @param user
    */
   async get_user_apy(user: string, sourcePublicKey: string): Promise<bigint> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-    ];
-    return this.simulate<bigint>("get_user_apy", args, sourcePublicKey);
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal()];
+    return this.simulate<bigint>('get_user_apy', args, sourcePublicKey);
   }
 
   /**
@@ -2822,7 +2238,7 @@ export class VaultClient {
    */
   async get_agent(sourcePublicKey: string): Promise<string> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<string>("get_agent", args, sourcePublicKey);
+    return this.simulate<string>('get_agent', args, sourcePublicKey);
   }
 
   /**
@@ -2830,7 +2246,7 @@ export class VaultClient {
    */
   async get_owner(sourcePublicKey: string): Promise<string> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<string>("get_owner", args, sourcePublicKey);
+    return this.simulate<string>('get_owner', args, sourcePublicKey);
   }
 
   /**
@@ -2838,7 +2254,7 @@ export class VaultClient {
    */
   async is_paused(sourcePublicKey: string): Promise<boolean> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<boolean>("is_paused", args, sourcePublicKey);
+    return this.simulate<boolean>('is_paused', args, sourcePublicKey);
   }
 
   /**
@@ -2846,7 +2262,7 @@ export class VaultClient {
    */
   async get_version(sourcePublicKey: string): Promise<number> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<number>("get_version", args, sourcePublicKey);
+    return this.simulate<number>('get_version', args, sourcePublicKey);
   }
 
   /**
@@ -2854,7 +2270,7 @@ export class VaultClient {
    */
   async get_usdc_token(sourcePublicKey: string): Promise<string> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<string>("get_usdc_token", args, sourcePublicKey);
+    return this.simulate<string>('get_usdc_token', args, sourcePublicKey);
   }
 
   /**
@@ -2862,7 +2278,7 @@ export class VaultClient {
    */
   async get_current_protocol(sourcePublicKey: string): Promise<string> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<string>("get_current_protocol", args, sourcePublicKey);
+    return this.simulate<string>('get_current_protocol', args, sourcePublicKey);
   }
 
   /**
@@ -2870,11 +2286,7 @@ export class VaultClient {
    */
   async get_blend_pool(sourcePublicKey: string): Promise<string | null> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<string | null>(
-      "get_blend_pool",
-      args,
-      sourcePublicKey,
-    );
+    return this.simulate<string | null>('get_blend_pool', args, sourcePublicKey);
   }
 
   /**
@@ -2882,7 +2294,7 @@ export class VaultClient {
    */
   async get_dex_pool(sourcePublicKey: string): Promise<string | null> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<string | null>("get_dex_pool", args, sourcePublicKey);
+    return this.simulate<string | null>('get_dex_pool', args, sourcePublicKey);
   }
 
   /**
@@ -2890,11 +2302,7 @@ export class VaultClient {
    */
   async get_blend_approval_ttl(sourcePublicKey: string): Promise<number> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<number>(
-      "get_blend_approval_ttl",
-      args,
-      sourcePublicKey,
-    );
+    return this.simulate<number>('get_blend_approval_ttl', args, sourcePublicKey);
   }
 
   /**
@@ -2902,7 +2310,7 @@ export class VaultClient {
    */
   async get_exchange_rate(sourcePublicKey: string): Promise<bigint> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<bigint>("get_exchange_rate", args, sourcePublicKey);
+    return this.simulate<bigint>('get_exchange_rate', args, sourcePublicKey);
   }
 
   /**
@@ -2910,7 +2318,7 @@ export class VaultClient {
    */
   async get_idle_balance(sourcePublicKey: string): Promise<bigint> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<bigint>("get_idle_balance", args, sourcePublicKey);
+    return this.simulate<bigint>('get_idle_balance', args, sourcePublicKey);
   }
 
   /**
@@ -2918,7 +2326,7 @@ export class VaultClient {
    */
   async get_deployed_assets(sourcePublicKey: string): Promise<bigint> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<bigint>("get_deployed_assets", args, sourcePublicKey);
+    return this.simulate<bigint>('get_deployed_assets', args, sourcePublicKey);
   }
 
   /**
@@ -2926,7 +2334,7 @@ export class VaultClient {
    */
   async get_asset_breakdown(sourcePublicKey: string): Promise<unknown> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<unknown>("get_asset_breakdown", args, sourcePublicKey);
+    return this.simulate<unknown>('get_asset_breakdown', args, sourcePublicKey);
   }
 
   /**
@@ -2934,16 +2342,9 @@ export class VaultClient {
    * @param max_size
    * @param ttl
    */
-  async set_queue_config(
-    signer: StellarSdk.Keypair,
-    max_size: number,
-    ttl: bigint,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(max_size, { type: "u32" }),
-      nativeToScVal(ttl, { type: "u64" }),
-    ];
-    return this.invoke<void>("set_queue_config", args, signer);
+  async set_queue_config(signer: StellarSdk.Keypair, max_size: number, ttl: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(max_size, { type: 'u32' }), nativeToScVal(ttl, { type: 'u64' })];
+    return this.invoke<void>('set_queue_config', args, signer);
   }
 
   /**
@@ -2951,7 +2352,7 @@ export class VaultClient {
    */
   async get_queue_config(sourcePublicKey: string): Promise<unknown> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<unknown>("get_queue_config", args, sourcePublicKey);
+    return this.simulate<unknown>('get_queue_config', args, sourcePublicKey);
   }
 
   /**
@@ -2959,34 +2360,18 @@ export class VaultClient {
    * @param user
    * @param amount
    */
-  async queue_withdrawal(
-    signer: StellarSdk.Keypair,
-    user: string,
-    amount: bigint,
-  ): Promise<TxResult<number>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-      nativeToScVal(amount, { type: "i128" }),
-    ];
-    return this.invoke<number>("queue_withdrawal", args, signer);
+  async queue_withdrawal(signer: StellarSdk.Keypair, user: string, amount: bigint): Promise<TxResult<number>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal(), nativeToScVal(amount, { type: 'i128' })];
+    return this.invoke<number>('queue_withdrawal', args, signer);
   }
 
   /**
    * Function get_withdrawal_request
    * @param request_id
    */
-  async get_withdrawal_request(
-    request_id: number,
-    sourcePublicKey: string,
-  ): Promise<unknown> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      nativeToScVal(request_id, { type: "u32" }),
-    ];
-    return this.simulate<unknown>(
-      "get_withdrawal_request",
-      args,
-      sourcePublicKey,
-    );
+  async get_withdrawal_request(request_id: number, sourcePublicKey: string): Promise<unknown> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(request_id, { type: 'u32' })];
+    return this.simulate<unknown>('get_withdrawal_request', args, sourcePublicKey);
   }
 
   /**
@@ -2994,29 +2379,16 @@ export class VaultClient {
    */
   async get_vault_health_snapshot(sourcePublicKey: string): Promise<unknown> {
     const args: StellarSdk.xdr.ScVal[] = [];
-    return this.simulate<unknown>(
-      "get_vault_health_snapshot",
-      args,
-      sourcePublicKey,
-    );
+    return this.simulate<unknown>('get_vault_health_snapshot', args, sourcePublicKey);
   }
 
   /**
    * Returns the next withdrawal eligibility for a user (#846)
    * @param user
    */
-  async get_withdrawal_eligibility(
-    user: string,
-    sourcePublicKey: string,
-  ): Promise<unknown> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-    ];
-    return this.simulate<unknown>(
-      "get_withdrawal_eligibility",
-      args,
-      sourcePublicKey,
-    );
+  async get_withdrawal_eligibility(user: string, sourcePublicKey: string): Promise<unknown> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal()];
+    return this.simulate<unknown>('get_withdrawal_eligibility', args, sourcePublicKey);
   }
 
   /**
@@ -3024,32 +2396,18 @@ export class VaultClient {
    * @param user
    * @param request_id
    */
-  async cancel_withdrawal_request(
-    signer: StellarSdk.Keypair,
-    user: string,
-    request_id: number,
-  ): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(user).toScVal(),
-      nativeToScVal(request_id, { type: "u32" }),
-    ];
-    return this.invoke<void>("cancel_withdrawal_request", args, signer);
+  async cancel_withdrawal_request(signer: StellarSdk.Keypair, user: string, request_id: number): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(user).toScVal(), nativeToScVal(request_id, { type: 'u32' })];
+    return this.invoke<void>('cancel_withdrawal_request', args, signer);
   }
 
   /**
    * Function process_withdrawal_queue
-   * @param keeper
+   * @param agent
    * @param batch_size
    */
-  async process_withdrawal_queue(
-    signer: StellarSdk.Keypair,
-    keeper: string,
-    batch_size: number,
-  ): Promise<TxResult<number>> {
-    const args: StellarSdk.xdr.ScVal[] = [
-      new StellarSdk.Address(keeper).toScVal(),
-      nativeToScVal(batch_size, { type: "u32" }),
-    ];
-    return this.invoke<number>("process_withdrawal_queue", args, signer);
+  async process_withdrawal_queue(signer: StellarSdk.Keypair, agent: string, batch_size: number): Promise<TxResult<number>> {
+    const args: StellarSdk.xdr.ScVal[] = [new StellarSdk.Address(agent).toScVal(), nativeToScVal(batch_size, { type: 'u32' })];
+    return this.invoke<number>('process_withdrawal_queue', args, signer);
   }
 }

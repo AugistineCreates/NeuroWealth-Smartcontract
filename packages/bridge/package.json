@@ -11,8 +11,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@neurowealth/vault-client": "workspace:*",
-    "@stellar/stellar-sdk": "^16.1.0",
+    "@neurowealth/vault-client": "^1.0.0",
+    "@stellar/stellar-sdk": "^12.3.0",
     "ethers": "^6.8.0",
     "axios": "^1.6.0",
     "pg": "^8.11.0",

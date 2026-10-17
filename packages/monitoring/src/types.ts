@@ -11,6 +11,10 @@ export interface MonitoringConfig {
   thresholds: AlertThresholds;
   metricsBackendUrl?: string;
   enablePauseDrill?: boolean;
+  insurance?: {
+    minimumFundLevel: number;
+    alertCooldownMs?: number;
+  };
 }
 
 export interface AlertWebhook {
@@ -40,6 +44,7 @@ export interface HealthMetrics {
   sharePrice: number;
   tvlCap: bigint;
   userDepositCap: bigint;
+  insuranceFundBalance?: number | bigint;
   pendingUpgrade?: PendingTimelock;
   pendingAgent?: PendingTimelock;
 }
@@ -72,7 +77,8 @@ export type AlertType =
   | "agent_update_proposed"
   | "owner_transfer_initiated"
   | "anomalous_activity"
-  | "rpc_connectivity";
+  | "rpc_connectivity"
+  | "insurance_fund_level";
 
 export interface MetricRecord {
   timestamp: number;

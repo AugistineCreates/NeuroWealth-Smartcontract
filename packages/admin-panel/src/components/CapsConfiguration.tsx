@@ -64,19 +64,19 @@ export function CapsConfiguration({ client, signer }: CapsConfigurationProps) {
 
     try {
       const capInBaseUnits = BigInt(newTvlCap) * BigInt(10 ** DECIMAL_PLACES);
-      const result = await client.set_tvl_cap(
-        signer,
-        signer.publicKey(),
-        capInBaseUnits,
-      );
-      setTxHash(result.hash);
+      const result = await client.set_tvl_cap(signer, capInBaseUnits);
+      setTxHash(result?.hash ?? null);
       setTvlCap(capInBaseUnits);
 
       // Poll for confirmation
       const server = getSorobanServer(network);
+      const txHash = result?.hash;
+      if (!txHash) {
+        throw new Error("Transaction hash missing");
+      }
       for (let i = 0; i < 60; i++) {
         try {
-          const tx = await server.getTransaction(result.hash);
+          const tx = await server.getTransaction(txHash);
           if (tx.status === "SUCCESS") break;
         } catch {
           // Not confirmed yet
@@ -97,19 +97,19 @@ export function CapsConfiguration({ client, signer }: CapsConfigurationProps) {
 
     try {
       const capInBaseUnits = BigInt(newUserCap) * BigInt(10 ** DECIMAL_PLACES);
-      const result = await client.set_user_deposit_cap(
-        signer,
-        signer.publicKey(),
-        capInBaseUnits,
-      );
-      setTxHash(result.hash);
+      const result = await client.set_user_deposit_cap(signer, capInBaseUnits);
+      setTxHash(result?.hash ?? null);
       setUserDepositCap(capInBaseUnits);
 
       // Poll for confirmation
       const server = getSorobanServer(network);
+      const txHash = result?.hash;
+      if (!txHash) {
+        throw new Error("Transaction hash missing");
+      }
       for (let i = 0; i < 60; i++) {
         try {
-          const tx = await server.getTransaction(result.hash);
+          const tx = await server.getTransaction(txHash);
           if (tx.status === "SUCCESS") break;
         } catch {
           // Not confirmed yet
@@ -136,19 +136,22 @@ export function CapsConfiguration({ client, signer }: CapsConfigurationProps) {
 
       const result = await client.set_deposit_limits(
         signer,
-        signer.publicKey(),
         minInBaseUnits,
         maxInBaseUnits,
       );
-      setTxHash(result.hash);
+      setTxHash(result?.hash ?? null);
       setMinDeposit(minInBaseUnits);
       setMaxDeposit(maxInBaseUnits);
 
       // Poll for confirmation
       const server = getSorobanServer(network);
+      const txHash = result?.hash;
+      if (!txHash) {
+        throw new Error("Transaction hash missing");
+      }
       for (let i = 0; i < 60; i++) {
         try {
-          const tx = await server.getTransaction(result.hash);
+          const tx = await server.getTransaction(txHash);
           if (tx.status === "SUCCESS") break;
         } catch {
           // Not confirmed yet

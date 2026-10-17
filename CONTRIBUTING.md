@@ -85,7 +85,7 @@ To contribute to the smart contracts, you'll need the following installed:
   cargo install --locked stellar-cli --version "$STELLAR_VERSION" --features opt
   ```
   Using a different version than the pin is the most common cause of CI failures locally.
-- **Node.js & npm**: For agent and frontend development (LTS version recommended).
+- **Node.js & npm**: For package workspace, agent, frontend, and WhatsApp development (LTS version recommended).
 
 ### Building the Contract
 
@@ -107,8 +107,22 @@ cargo test
 
 For frontend or agent changes, run:
 ```bash
+cd <package-directory>
+npm ci
 npm test
 ```
+
+For the npm package workspaces (`packages/*`), run from the repository root:
+
+```bash
+npm ci
+npm test
+```
+
+This runs every package workspace test script. The admin panel currently has
+no tests; its test command prints an explicit no-tests-yet gate. The
+`agent/`, `frontend/`, and `whatsapp/` projects are not root npm workspaces, so
+run their tests from their own directories.
 
 > **Touching share accounting?** If your change lands anywhere under
 > `neurowealth-vault/contracts/vault/src/`, CI also runs the deposit/withdraw

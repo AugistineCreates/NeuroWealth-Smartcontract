@@ -9,11 +9,12 @@
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "monitor": "ts-node src/monitor.ts",
-    "test": "jest"
+    "test": "jest",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@neurowealth/vault-client": "workspace:*",
-    "@stellar/stellar-sdk": "^16.1.0",
+    "@neurowealth/vault-client": "^1.0.0",
+    "@stellar/stellar-sdk": "^12.3.0",
     "pino": "^8.16.0",
     "pino-pretty": "^10.2.0",
     "axios": "^1.6.0",

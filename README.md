@@ -82,6 +82,7 @@ Price Feeds: Stellar anchor price feeds
 
 ```text
 NeuroWealth-Smartcontract/
+├── package.json                    # npm workspace and aggregate package tests
 ├── agent/                          # AI agent backend (implemented; see agent/README.md)
 ├── neurowealth-vault/              # Soroban smart contracts workspace
 │   ├── Cargo.toml
@@ -164,6 +165,17 @@ The repository now contains the production workspaces rather than planned placeh
 | Bridge package | `packages/bridge/` | Cross-chain bridge integration surface | Package workspace |
 | Monitoring package | `packages/monitoring/` | Operations and alerting integration surface | Package workspace |
 | Admin panel package | `packages/admin-panel/` | Operator-facing administrative UI surface | Package workspace |
+
+Install package workspace dependencies and run their tests from the repository root:
+
+```bash
+npm ci
+npm test
+```
+
+`npm test` runs tests across `packages/*`; admin-panel currently reports an
+explicit no-tests-yet gate. For `agent/`, `frontend/`, and `whatsapp/`, install
+dependencies and run tests from the respective directory.
 
 ## Getting Started
 ### Prerequisites
@@ -550,13 +562,10 @@ export SOROBAN_NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
 ⚠️ **CRITICAL:** Before deploying to Stellar mainnet, you must complete and sign off on all items in the [Mainnet Deployment Checklist](docs/MAINNET_CHECKLIST.md) (including separate keys setup, TVL limits, Blend pool verification, pause drills, and multisig governance plans).
 
 ```bash
-# Ensure all tests pass first (there is no root package.json; run each package's tests)
-(cd neurowealth-vault && cargo test)
-(cd agent && npm test)
-(cd whatsapp && npm test)
-
-# Rehearse the deployment without broadcasting transactions
-./scripts/deploy-mainnet.sh --dry-run
+# Ensure contract and npm package workspace tests pass first
+cargo test
+npm ci
+npm test
 
 # Deploy to mainnet
 ./scripts/deploy-mainnet.sh
