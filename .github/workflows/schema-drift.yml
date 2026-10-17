@@ -9,9 +9,6 @@ on:
       - "db/types.ts"
       - "scripts/check-schema-drift.py"
 
-permissions:
-  contents: read
-
 jobs:
   schema-drift:
     name: Schema drift check
@@ -21,10 +18,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c
         with:
           python-version: "3.11"
 

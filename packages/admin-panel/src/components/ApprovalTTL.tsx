@@ -49,19 +49,19 @@ export function ApprovalTTL({ client, signer }: ApprovalTTLProps) {
     setTxHash(null);
 
     try {
-      const result = await client.set_approval_ttl(
-        signer,
-        signer.publicKey(),
-        value,
-      );
-      setTxHash(result.hash);
+      const result = await client.set_approval_ttl(signer, value);
+      setTxHash(result?.hash ?? null);
       setTtl(value);
 
       // Poll for confirmation
       const server = getSorobanServer(network);
+      const txHash = result?.hash;
+      if (!txHash) {
+        throw new Error("Transaction hash missing");
+      }
       for (let i = 0; i < 60; i++) {
         try {
-          const tx = await server.getTransaction(result.hash);
+          const tx = await server.getTransaction(txHash);
           if (tx.status === "SUCCESS") break;
         } catch {
           // Not confirmed yet

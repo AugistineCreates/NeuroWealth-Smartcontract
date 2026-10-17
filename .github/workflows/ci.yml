@@ -9,9 +9,6 @@ on:
   schedule:
     - cron: "0 3 * * 0"
 
-permissions:
-  contents: read
-
 env:
   # Maximum allowed size in bytes for the optimised contract WASM.
   # Raise this in the same PR as any deliberate feature addition that grows
@@ -30,7 +27,7 @@ jobs:
     permissions:
       contents: read
       - name: Checkout (full history)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
 
@@ -107,7 +104,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Read Stellar CLI version
         id: cli-version
@@ -116,18 +113,18 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust toolchain with components
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
 
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: neurowealth-vault
 
       - name: Cache cargo registry and tooling
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
             ~/.cargo/bin/
@@ -174,13 +171,13 @@ jobs:
               RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
               ;;
             vault-client-typecheck)
-              npm ci
-              npm run typecheck
-              npm run test
+              npm ci --prefix ../..
+              npm run typecheck --prefix ../.. --workspace=@neurowealth/vault-client
+              npm test --prefix ../.. --workspace=@neurowealth/vault-client
               ;;
             vault-ui-test)
-              npm install
-              npm run test
+              npm ci --prefix ../..
+              npm test --prefix ../.. --workspace=@neurowealth/vault-ui
               ;;
             frontend-lint)
               npm ci
@@ -298,11 +295,49 @@ jobs:
 
       - name: Upload optimised WASM artifact
         if: matrix.step == 'build-wasm'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: neurowealth-vault-wasm
           path: ${{ env.WASM_FILE }}
           retention-days: 14
+
+  package-checks:
+    name: Package checks (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: admin-panel
+            workspace: "@neurowealth/admin-panel"
+          - package: bridge
+            workspace: "@neurowealth/bridge"
+          - package: monitoring
+            workspace: "@neurowealth/monitoring"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install workspace dependencies
+        run: npm ci
+
+      - name: Build vault-client workspace
+        run: npm run build --workspace=@neurowealth/vault-client
+
+      - name: Typecheck ${{ matrix.package }}
+        run: npm run typecheck --workspace=${{ matrix.workspace }}
+
+      - name: Test ${{ matrix.package }}
+        run: npm test --workspace=${{ matrix.workspace }}
 
   frontend-e2e:
     name: Frontend Vault Journey Smoke
@@ -312,10 +347,10 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 20
           cache: npm
@@ -337,7 +372,7 @@ jobs:
 
       - name: Upload browser diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: frontend-vault-journey-failure-artifacts
           path: frontend/test-results/
@@ -352,9 +387,9 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Run Kani proofs
-        uses: model-checking/kani-github-action@v1.1
+        uses: model-checking/kani-github-action@f838096619a707b0f6b2118cf435eaccfa33e51f
         with:
           args: --manifest-path neurowealth-vault/Cargo.toml -p share-math
 
@@ -367,10 +402,10 @@ jobs:
     # The workflow-level weekly cron (Sunday 03:00 UTC) re-runs this job
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Run cargo-deny
-        uses: EmbarkStudios/cargo-deny-action@v2.0.0
+        uses: EmbarkStudios/cargo-deny-action@10d8902cf9225c404574ce39c45d5d26c3047464
         with:
           command: check
           # The vault workspace manifest drives the dependency graph.
@@ -385,7 +420,7 @@ jobs:
         # already visible on the PR itself, while a scheduled failure has no
         # PR to surface it and would otherwise go unnoticed.
         if: failure() && github.event_name == 'schedule'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
         with:
           script: |
             const title = 'Scheduled cargo-deny audit is failing (dependency advisory drift)';
@@ -435,10 +470,10 @@ jobs:
     # Two clean uncached builds are expensive, so this runs where an
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
           targets: wasm32-unknown-unknown
 
@@ -457,7 +492,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Validate README
         run: bash scripts/check-readme.sh .
@@ -469,7 +504,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Verify access control table accuracy (spec)
         run: bash scripts/check-access-control.sh
@@ -497,9 +532,9 @@ jobs:
       share_math: ${{ steps.filter.outputs.share_math }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Check for contract changes
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad
         id: filter
         with:
           filters: |
@@ -539,13 +574,13 @@ jobs:
           - user_strategy
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@2c76c034f9e32a5d6e2c104dc4df23a22476db04
 
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: neurowealth-vault
 
@@ -578,13 +613,13 @@ jobs:
       (github.event_name == 'pull_request' && needs.changes.outputs.share_math == 'true')
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@2c76c034f9e32a5d6e2c104dc4df23a22476db04
 
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: neurowealth-vault/share-math/fuzz
 
@@ -630,7 +665,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Read Stellar CLI version
         id: cli-version
@@ -639,12 +674,12 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
           targets: wasm32-unknown-unknown
 
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: neurowealth-vault
 
@@ -693,7 +728,7 @@ jobs:
 
       - name: Upload E2E artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: e2e-devnet-artifacts
           path: scripts/e2e-artifacts/
@@ -752,15 +787,15 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
           components: clippy
 
       - name: Cache cargo registry & build artefacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
       # Layer (a): Clippy forbids bare integer arithmetic operators.
       # -D turns the lint into a hard error; the build fails if any violation
