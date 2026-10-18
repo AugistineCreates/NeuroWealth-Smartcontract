@@ -15,6 +15,15 @@ use soroban_sdk::{
     symbol_short, testutils::Address as _, testutils::Ledger, Address, BytesN, Env, TryFromVal,
 };
 
+/// Keeps storage entries alive across the large ledger jumps these tests make.
+fn keep_storage_alive(env: &Env) {
+    env.ledger().with_mut(|li| {
+        li.min_persistent_entry_ttl = 1_000_000;
+        li.min_temp_entry_ttl = 1_000_000;
+        li.max_entry_ttl = 2_000_000;
+    });
+}
+
 #[test]
 fn test_initialize_emits_init_event_with_correct_payload() {
     let env = Env::default();
@@ -435,12 +444,19 @@ fn test_set_caps_emits_caps_event_with_correct_payload() {
 fn test_update_agent_emits_agent_event_with_correct_payload() {
     let env = Env::default();
     env.mock_all_auths();
+    keep_storage_alive(&env);
 
     let (contract_id, old_agent, _owner) = setup_vault(&env);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
 
+    // update_agent only proposes (step 1 of 2, issue #317); AgentUpdatedEvent
+    // (TOPIC_AGENT_UPDATED) is only emitted by confirm_agent_update() for
+    // backward-compatible indexers, once the timelock has elapsed.
     let new_agent = Address::generate(&env);
     client.update_agent(&new_agent);
+    let (_, expiry) = client.get_pending_agent_update().unwrap();
+    env.ledger().set_sequence_number(expiry);
+    client.confirm_agent_update();
 
     let agent_events = find_events_by_topic(env.events().all(), &env, TOPIC_AGENT_UPDATED);
     assert!(

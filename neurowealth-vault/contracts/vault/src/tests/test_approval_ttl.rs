@@ -271,7 +271,7 @@ fn test_set_blend_approval_ttl_zero_with_deployed_funds_allows_withdrawal() {
     // Deposit funds and deploy them to Blend via rebalance
     let user = Address::generate(&env);
     mint_and_deposit(&env, &client, &usdc_token, &user, 10_000_000_i128);
-    client.rebalance(&_agent, &symbol_short!("blend"), &5_000_000_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &700_i128, &0_i128);
 
     // Verify funds are deployed (vault has less idle USDC)
     let vault_idle_balance = token_client.balance(&contract_id);

@@ -318,7 +318,17 @@ fn run_full_lifecycle(env: &Env) -> soroban_sdk::Vec<Symbol> {
         after_partial.user_balance < after_yield.user_balance,
         "the exiting user's claim must shrink"
     );
-    assert_eq!(blend.supplied(&usdc), reported_with_yield - PARTIAL_EXIT);
+    // NOTE: `blend.supplied(&usdc)` is the mock's own principal-only ledger —
+    // it is incremented/decremented solely by `submit_with_allowance`/`submit`
+    // (supply/withdraw) calls, and step 3's `token.mint(&blend_pool, &YIELD)`
+    // simulates yield by minting raw tokens directly into the pool, bypassing
+    // that ledger entirely (the real contract's own `deployed` accounting,
+    // asserted above via `get_asset_breakdown`, DOES include the yield — it
+    // reads the pool's live token balance, not this principal-only counter).
+    // So after this withdrawal the ledger reflects principal only:
+    // DEPOSIT_TOTAL minus the amount actually pulled out, not
+    // reported_with_yield minus PARTIAL_EXIT.
+    assert_eq!(blend.supplied(&usdc), DEPOSIT_TOTAL - PARTIAL_EXIT);
     assert_accounting_invariants(&client, &users, "after partial exit");
 
     // ── 5. Rotation: Blend → DEX ──────────────────────────────────────────
@@ -326,10 +336,18 @@ fn run_full_lifecycle(env: &Env) -> soroban_sdk::Vec<Symbol> {
 
     let after_rotation = snapshot(&client, &alice);
     assert_eq!(after_rotation.current_protocol, symbol_short!("dex"));
+    // As in step 4 above, `blend.supplied(&usdc)` is the mock's
+    // principal-only ledger: it never saw the `YIELD` that step 3's
+    // `token.mint(&blend_pool, &YIELD)` added directly to the pool's raw
+    // token balance. A full exit withdraws that real (yield-inclusive)
+    // balance — which is what `after_rotation.deployed`/`dex.balance` below
+    // confirm landed correctly in DEX — so the principal-only ledger is left
+    // exactly `YIELD` below zero, not at zero.
     assert_eq!(
         blend.supplied(&usdc),
-        0,
-        "rotation must fully exit the old venue"
+        -YIELD,
+        "rotation must fully exit the old venue (mock ledger reflects \
+         principal minus the yield it never tracked)"
     );
     assert_eq!(dex.balance(&usdc, &vault_id), after_partial.deployed);
     assert_eq!(after_rotation.idle, 0);

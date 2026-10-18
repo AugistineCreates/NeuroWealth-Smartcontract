@@ -59,8 +59,8 @@ mod test_security_agent_drain;
 mod test_share_conversion_proptest;
 mod test_share_locking;
 mod test_shares;
-mod test_standby_agent;
 mod test_stale_state_audit;
+mod test_standby_agent;
 mod test_storage_griefing_analysis;
 mod test_strategy_switch_low_liquidity;
 mod test_total_assets_cap;
@@ -89,8 +89,8 @@ mod test_performance_fee;
 // calls, and a stale `setup_vault()` call shape rewritten against the real
 // fixture API in `utils.rs`. Both now test real, existing entry points.
 mod test_insurance_fund;
-mod test_withdrawal_queue;
 mod test_pause_queue_breaker_matrix_proptest;
+mod test_withdrawal_queue;
 
 // `test_user_apy` and `test_min_withdraw`/`test_min_withdrawal` stay disabled:
 // they call `get_user_deposit_timestamp`/`get_user_realized_apy` and

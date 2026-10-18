@@ -15,17 +15,18 @@ use soroban_sdk::{
     Env, TryFromVal,
 };
 
-/// Reads the single `ttl_sch` event emitted so far, failing if there is not
-/// exactly one.
+/// Reads the most recently emitted `ttl_sch` event, failing if none exists.
+///
+/// `env.events().all()` accumulates every event emitted so far in the test,
+/// so callers that invoke `set_approval_ttl` more than once (e.g. in a loop
+/// over several TTL values) will see more than one `ttl_sch` event by the
+/// time this runs. The most recent one reflects the state asserted against
+/// immediately after each call, which is what every caller here wants.
 fn only_schedule_event(env: &Env) -> ProtocolApprovalScheduledEvent {
     let events = find_events_by_topic(env.events().all(), env, TOPIC_APPROVAL_TTL_SCHEDULED);
-    assert_eq!(
-        events.len(),
-        1,
-        "expected exactly one approval-schedule event, got {}",
-        events.len()
-    );
-    let (_, _, data) = &events[0];
+    let (_, _, data) = events
+        .last()
+        .expect("expected at least one approval-schedule event");
     ProtocolApprovalScheduledEvent::try_from_val(env, data)
         .expect("should be a valid ProtocolApprovalScheduledEvent")
 }

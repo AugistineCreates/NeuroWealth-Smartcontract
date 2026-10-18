@@ -150,7 +150,7 @@ fn test_agent_rebalance_with_scoped_auth() {
         invoke: &MockAuthInvoke {
             contract: &contract_id,
             fn_name: "rebalance",
-            args: (symbol_short!("none"), 500_i128, 0_i128).into_val(&env),
+            args: (agent.clone(), symbol_short!("none"), 500_i128, 0_i128).into_val(&env),
             sub_invokes: &[],
         },
     }]);

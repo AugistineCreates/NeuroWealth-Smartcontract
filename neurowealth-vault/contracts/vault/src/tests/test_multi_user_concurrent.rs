@@ -362,7 +362,7 @@ fn test_concurrent_harvest_interleaved_with_withdrawals() {
     // Agent harvests (compounds yield back into Blend).
     // Disable cooldown so harvest can fire right after rebalance.
     client.set_rebalance_cooldown(&0_u32);
-    client.harvest(&0_i128);
+    client.harvest(&agent, &0_i128);
     assert_vault_invariants(&client, &[user_a.clone(), user_b.clone()]);
 
     // User B makes a partial withdrawal.
@@ -371,7 +371,7 @@ fn test_concurrent_harvest_interleaved_with_withdrawals() {
     assert_vault_invariants(&client, &[user_a.clone(), user_b.clone()]);
 
     // Second harvest after the second withdrawal.
-    client.harvest(&0_i128);
+    client.harvest(&agent, &0_i128);
     assert_vault_invariants(&client, &[user_a.clone(), user_b.clone()]);
 
     // Both users withdraw their remaining balances; vault should be fully drained.

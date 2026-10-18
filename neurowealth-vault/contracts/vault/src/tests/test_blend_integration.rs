@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use super::utils::*;
-use soroban_sdk::{testutils::Events, vec, Env, IntoVal, Symbol, Val, Vec};
+use soroban_sdk::{testutils::Events, Env, Symbol};
 
 #[test]
 fn test_blend_integration_supply_via_rebalance() {
@@ -26,7 +26,7 @@ fn test_blend_integration_supply_via_rebalance() {
 
     // 3. Trigger rebalance to Blend
     let protocol = Symbol::new(&env, "blend");
-    vault_client.rebalance(&protocol, &850, &0_i128); // 8.5% expected APY
+    vault_client.rebalance(&_agent, &protocol, &850, &0_i128); // 8.5% expected APY
 
     // 4. Verify results
     // - Vault USDC balance should be 0 (transferred to Blend)
@@ -57,11 +57,11 @@ fn test_blend_integration_withdraw_via_rebalance() {
     // 1. Supply to Blend first
     let amount = 50_000_000;
     token_client.mint(&vault_id, &amount);
-    vault_client.rebalance(&Symbol::new(&env, "blend"), &850, &0_i128);
+    vault_client.rebalance(&_agent, &Symbol::new(&env, "blend"), &850, &0_i128);
     assert_eq!(token_client.balance(&blend_pool), amount);
 
     // 2. Withdraw from Blend by rebalancing to "none"
-    vault_client.rebalance(&Symbol::new(&env, "none"), &0, &0_i128);
+    vault_client.rebalance(&_agent, &Symbol::new(&env, "none"), &0, &0_i128);
 
     // 3. Verify results
     // - Vault USDC balance should be restored
@@ -103,7 +103,7 @@ fn test_blend_balance_delta_against_lying_pool() {
     let lying_reported = deposit_amount * 2;
     blend_client.set_reported_supply_amount(&lying_reported);
 
-    vault_client.rebalance(&Symbol::new(&env, "blend"), &850, &0_i128);
+    vault_client.rebalance(&_agent, &Symbol::new(&env, "blend"), &850, &0_i128);
 
     let total_assets = vault_client.get_total_assets();
     assert_eq!(
@@ -130,15 +130,12 @@ fn test_blend_integration_balance_read() {
     // 1. Supply some funds
     let amount = 75_000_000;
     token_client.mint(&vault_id, &amount);
-    vault_client.rebalance(&Symbol::new(&env, "blend"), &850, &0_i128);
+    vault_client.rebalance(&_agent, &Symbol::new(&env, "blend"), &850, &0_i128);
 
-    // 2. Check balance via vault's internal get_blend_pool getter
-    // Note: The vault doesn't have a public get_blend_balance, but we can verify it indirectly
-    // or by checking the mock's balance directly as a proxy of what the vault sees.
-
-    // Let's use a manual contract call to verify the mock responds correctly to the vault's expectation
-    let args: Vec<Val> = vec![&env, usdc_token.into_val(&env), vault_id.into_val(&env)];
-    let balance: i128 = env.invoke_contract(&blend_pool, &Symbol::new(&env, "balance"), args);
+    // 2. Check balance via the shared get_reserve + get_positions helper
+    // (#986 — Blend has no plain `balance(asset, user)` function; the mock
+    // mirrors the real pool's two-call shape).
+    let balance = blend_pool_balance(&env, &blend_pool, &usdc_token, &vault_id);
 
     assert_eq!(balance, amount);
 }

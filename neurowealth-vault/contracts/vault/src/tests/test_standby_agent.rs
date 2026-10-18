@@ -150,12 +150,23 @@ fn test_rotated_out_primary_loses_agent_authorization() {
         invoke: &MockAuthInvoke {
             contract: &contract_id,
             fn_name: "rebalance",
-            args: (soroban_sdk::symbol_short!("none"), 500_i128, 0_i128).into_val(&env),
+            args: (
+                old_primary.clone(),
+                soroban_sdk::symbol_short!("none"),
+                500_i128,
+                0_i128,
+            )
+                .into_val(&env),
             sub_invokes: &[],
         },
     }]);
 
     assert!(client
-        .try_rebalance(&soroban_sdk::symbol_short!("none"), &500_i128, &0_i128)
+        .try_rebalance(
+            &old_primary,
+            &soroban_sdk::symbol_short!("none"),
+            &500_i128,
+            &0_i128
+        )
         .is_err());
 }

@@ -106,9 +106,20 @@ fn test_zero_share_holders_are_filtered_out() {
     assert_eq!(all.get(0).unwrap(), (u1.clone(), 5_000_000));
     assert_eq!(all.get(1).unwrap(), (u3.clone(), 7_000_000));
 
-    // The stale slot still occupies index position 1, so a page over just that
-    // slot returns empty even though other holders exist (documented behaviour).
-    assert_eq!(client.get_users_with_shares(&1, &1).0.len(), 0);
+    // `prune_user_from_index` actively compacts the index on full withdrawal
+    // (see `burn_and_pay`'s `new_user_shares == 0` branch), so u2's slot does
+    // not linger as a stale gap — u3 shifts down into index position 1.
+    let (page, next) = client.get_users_with_shares(&1, &1);
+    assert_eq!(
+        page.len(),
+        1,
+        "compacted index still has a holder at position 1"
+    );
+    assert_eq!(page.get(0).unwrap(), (u3.clone(), 7_000_000));
+    assert_eq!(
+        next, None,
+        "position 1 is the last entry in the compacted index"
+    );
 }
 
 #[test]

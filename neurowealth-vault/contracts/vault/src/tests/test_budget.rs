@@ -250,7 +250,7 @@ fn test_budget_harvest() {
     client.rebalance(&_agent, &symbol_short!("blend"), &850_i128, &0_i128);
 
     let (cpu, mem) = measure(&env, || {
-        client.harvest(&0_i128);
+        client.harvest(&_agent, &0_i128);
     });
 
     std::println!("[budget] harvest  cpu={cpu}  mem={mem}");

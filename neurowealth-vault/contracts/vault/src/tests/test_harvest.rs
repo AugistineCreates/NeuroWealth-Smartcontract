@@ -108,7 +108,7 @@ fn test_harvest_withdraws_and_resupplies_blend() {
     let protocol_events_before =
         find_events_by_topic(env.events().all(), &env, TOPIC_PROTOCOL_CHANGED).len();
     let total_assets_before = client.get_total_assets();
-    client.harvest(&0_i128);
+    client.harvest(&_agent, &0_i128);
     assert_eq!(
         client.get_total_assets(),
         total_assets_before,
@@ -168,7 +168,7 @@ fn test_harvest_withdraws_and_resupplies_dex() {
         deposit_amount
     );
 
-    client.harvest(&0_i128);
+    client.harvest(&_agent, &0_i128);
 
     assert_eq!(
         client.get_current_protocol(),
@@ -203,7 +203,7 @@ fn test_harvest_updates_last_rebalance_ledger() {
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
 
     let before = env.ledger().sequence();
-    client.harvest(&0_i128);
+    client.harvest(&_agent, &0_i128);
 
     let stored = client.get_last_rebalance_ledger();
     assert!(
@@ -230,7 +230,7 @@ fn test_harvest_zero_position_emits_zero_amount() {
     client.rebalance(&_agent, &symbol_short!("blend"), &500_i128, &0_i128);
     assert_eq!(client.get_current_protocol(), symbol_short!("blend"));
 
-    client.harvest(&0_i128);
+    client.harvest(&_agent, &0_i128);
 
     let event = decode_harvest_event(&env);
     assert_eq!(event.protocol, symbol_short!("blend"));
@@ -254,7 +254,7 @@ fn test_harvest_rejects_when_paused() {
     client.pause(&owner);
     assert!(client.is_paused());
 
-    client.harvest(&0_i128);
+    client.harvest(&_agent, &0_i128);
 }
 
 /// `try_harvest` returns the typed `Paused` error so callers can distinguish
@@ -333,7 +333,7 @@ fn test_harvest_rejects_non_agent_signer() {
         invoke: &MockAuthInvoke {
             contract: &contract_id,
             fn_name: "harvest",
-            args: (0_i128,).into_val(&env),
+            args: (_agent.clone(), 0_i128).into_val(&env),
             sub_invokes: &[],
         },
     }]);
@@ -362,12 +362,12 @@ fn test_agent_harvest_with_scoped_auth() {
         invoke: &MockAuthInvoke {
             contract: &contract_id,
             fn_name: "harvest",
-            args: (0_i128,).into_val(&env),
+            args: (agent.clone(), 0_i128).into_val(&env),
             sub_invokes: &[],
         },
     }]);
 
-    client.harvest(&0_i128);
+    client.harvest(&agent, &0_i128);
 
     let event = decode_harvest_event(&env);
     assert_eq!(event.protocol, symbol_short!("blend"));
@@ -388,7 +388,7 @@ fn test_harvest_rejects_negative_min_out() {
         setup_with_deployed_blend(&env, 10_000_000_i128);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
 
-    client.harvest(&-1_i128);
+    client.harvest(&_agent, &-1_i128);
 }
 
 /// `try_harvest` surfaces `MinOutMustBeNonNegative` (#16) for any negative
@@ -435,7 +435,7 @@ fn test_harvest_rejects_when_protocol_is_none() {
 
     // Fresh vault: CurrentProtocol defaults to "none".
     assert_eq!(client.get_current_protocol(), symbol_short!("none"));
-    client.harvest(&0_i128);
+    client.harvest(&_agent, &0_i128);
 }
 
 /// Harvest also rejects after an explicit rebalance back to `"none"`.
@@ -456,7 +456,7 @@ fn test_harvest_rejects_after_rebalance_to_none() {
     client.rebalance(&_agent, &symbol_short!("none"), &0_i128, &0_i128);
 
     assert_eq!(client.get_current_protocol(), symbol_short!("none"));
-    client.harvest(&0_i128);
+    client.harvest(&_agent, &0_i128);
 }
 
 #[test]
@@ -500,7 +500,7 @@ fn test_harvest_rejects_before_cooldown_elapses() {
     // setup_with_deployed_blend already rebalanced (and wrote LastRebalanceLedger)
     // in this same ledger. Enable a cooldown so the subsequent harvest is blocked.
     client.set_rebalance_cooldown(&10_u32);
-    client.harvest(&0_i128);
+    client.harvest(&_agent, &0_i128);
 }
 
 /// Two harvests in the same ledger with cooldown > 0: the first succeeds
@@ -523,9 +523,9 @@ fn test_second_harvest_within_cooldown_panics() {
     });
 
     client.set_rebalance_cooldown(&10_u32);
-    client.harvest(&0_i128);
+    client.harvest(&_agent, &0_i128);
     // Same ledger — elapsed == 0 < 10.
-    client.harvest(&0_i128);
+    client.harvest(&_agent, &0_i128);
 }
 
 /// `try_harvest` returns the typed cooldown error and does not update
@@ -580,7 +580,7 @@ fn test_harvest_succeeds_after_cooldown_elapses() {
         li.sequence_number = last + interval;
     });
 
-    client.harvest(&0_i128);
+    client.harvest(&_agent, &0_i128);
 
     let event = decode_harvest_event(&env);
     assert_eq!(event.protocol, symbol_short!("blend"));
@@ -608,11 +608,11 @@ fn test_consecutive_failed_harvests_trip_circuit_breaker() {
     client.set_max_consecutive_failures(&2);
     blend_client.set_max_withdraw_limit(&-1_i128);
 
-    client.harvest(&0_i128);
+    client.harvest(&_agent, &0_i128);
     assert_eq!(client.get_consecutive_failures(), 1);
     assert!(!client.is_paused());
 
-    client.harvest(&0_i128);
+    client.harvest(&_agent, &0_i128);
     assert_eq!(client.get_consecutive_failures(), 2);
     assert!(client.is_paused());
 }

@@ -9,11 +9,11 @@
 // Most events publish a single-element topic tuple, `(TOPIC_X,)`. Three
 // events additionally publish an indexed `Address` as topic 1 so indexers can
 // filter per user without scanning payloads: [`TOPIC_DEPOSIT`],
-// [`TOPIC_WITHDRAW`], and [`TOPIC_USER_STATEGY_UPDATED`].
+// [`TOPIC_WITHDRAW`], and [`TOPIC_USER_STRATEGY_UPDATED`].
 
 #![warn(missing_docs)]
 
-use soroban_sdk::{ symbol_short, Symbol };
+use soroban_sdk::{symbol_short, Symbol};
 
 /// Topic for `VaultInitializedEvent`, published once by `initialize`.
 pub const TOPIC_INIT: Symbol = symbol_short!("init");
@@ -22,7 +22,7 @@ pub const TOPIC_DEPOSIT: Symbol = symbol_short!("deposit");
 /// Topic 0 for `WithdrawEvent`; topic 1 is the withdrawing user's `Address`.
 ///
 /// Published by both `withdraw` and `withdraw_all`.
-pub const TOPIC_WITHRAW: Symbol = symbol_short!("withdraw");
+pub const TOPIC_WITHDRAW: Symbol = symbol_short!("withdraw");
 /// Topic for `RebalanceEvent`, published by every `rebalance` outcome
 /// (including `"noop").
 pub const TOPIC_REBALANCE: Symbol = symbol_short!("rebalance");
@@ -73,7 +73,7 @@ pub const TOPIC_DEX_POOL_CONFIGURED: Symbol = symbol_short!("dex_cfg");
 /// `DataKey::CurrentProtocol` changed.
 pub const TOPIC_PROTOCOL_CHANGED: Symbol = symbol_short!("proto_chg");
 /// Topic 0 for `UserStrategyUpdatedEvent`; topic 1 is the user's `Address`.
-pub const TOPIC_USER_STATEGY_UPDATED: Symbol = symbol_short!("usr_strat");
+pub const TOPIC_USER_STRATEGY_UPDATED: Symbol = symbol_short!("usr_strat");
 /// Topic for `RebalanceFailedEvent`, published when a protocol exit leg leaves
 /// a non-zero balance behind and the rebalance aborts without reverting.
 pub const TOPIC_REBALANCE_FAILED: Symbol = symbol_short!("reb_fail");
@@ -82,7 +82,7 @@ pub const TOPIC_AGENT_UPDATE_PROPOSED: Symbol = symbol_short!("agt_prop");
 /// Topic for `AgentUpdateConfirmedEvent`, published by `confirm_agent_update` (timelock step 2).
 pub const TOPIC_AGENT_UPDATE_CONFIRMED: Symbol = symbol_short!("agt_conf");
 /// Topic for `AgentUpdateCancelledEvent`, published by `cancel_agent_update`.
-pub const TOPIC_AGENT_UPDATE_CANCELLED : Symbol = symbol_short!("agt_cncl");
+pub const TOPIC_AGENT_UPDATE_CANCELLED: Symbol = symbol_short!("agt_cncl");
 /// Topic for `UpgradeScheduledEvent`, published by `schedule_upgrade` (timelock step 1).
 pub const TOPIC_UPGRADE_SCHEDULED: Symbol = symbol_short!("upg_sched");
 /// Topic for `UpgradeCancelledEvent`, published by `cancel_upgrade`.
@@ -104,6 +104,8 @@ pub const TOPIC_EMERGENCY_HARVEST: Symbol = symbol_short!("em_harv");
 pub const TOPIC_COMPOUND: Symbol = symbol_short!("compound");
 /// Topic 0 for `SharesMigratedEvent`; topic 1 is the migrating user's `Address`.
 pub const TOPIC_MIGRATE: Symbol = symbol_short!("migrate");
+/// Topic 0 for `MigrationReceivedEvent`; topic 1 is the migrated user's `Address`.
+pub const TOPIC_MIGRATION_RECEIVED: Symbol = symbol_short!("mig_recv");
 /// Topic for `MigrationTargetUpdatedEvent`, published when the owner sets/updates migration target.
 pub const TOPIC_MIGRATION_TARGET_UPDATED: Symbol = symbol_short!("mig_tgt");
 /// Topic for `MigrationTargetScheduledEvent`, published by `schedule_migration_target` (#969).
