@@ -84,11 +84,9 @@ fn test_funded_extension_updates_entry_and_preserves_balances() {
 
     // Force the entry under the threshold so the extension path is exercised.
     env.as_contract(&contract_id, || {
-        env.storage().persistent().extend_ttl(
-            &DataKey::Shares(user.clone()),
-            0,
-            1,
-        )
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Shares(user.clone()), 0, 1)
     });
     let ttl_before = shares_ttl(&env, &contract_id, &user);
 
@@ -295,7 +293,10 @@ fn test_recovery_after_lapse_is_a_normal_deposit() {
 
     mint_and_deposit(&env, &client, &usdc_token, &user, 5_000_000);
     expire_shares_entry(&env, &contract_id, &user);
-    assert!(!client.touch_user_ttl(&user), "bump cannot restore a lapsed entry");
+    assert!(
+        !client.touch_user_ttl(&user),
+        "bump cannot restore a lapsed entry"
+    );
 
     // The user is not locked out: a new deposit re-creates the entry.
     let amount = 1_000_000_i128;
@@ -311,7 +312,10 @@ fn test_recovery_after_lapse_is_a_normal_deposit() {
         ttl >= 100,
         "the restored entry must carry a healthy TTL, got {ttl}"
     );
-    assert!(client.touch_user_ttl(&user), "and must be maintainable again");
+    assert!(
+        client.touch_user_ttl(&user),
+        "and must be maintainable again"
+    );
 }
 
 // ============================================================================
@@ -340,7 +344,7 @@ fn test_protocol_approval_is_live_until_and_including_the_expiry_ledger() {
     mint_and_deposit(&env, &client, &usdc_token, &user, 10_000_000);
 
     let sequence = env.ledger().sequence();
-    client.rebalance(&symbol_short!("blend"), &700_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &700_i128, &0_i128);
     let expiry = token_client.allowance_expiration(&contract_id, &blend_pool);
     assert_eq!(expiry, sequence + ttl);
 
@@ -378,7 +382,7 @@ fn test_protocol_approval_state_is_consistent_after_failed_maintenance() {
 
     let user = Address::generate(&env);
     mint_and_deposit(&env, &client, &usdc_token, &user, 10_000_000);
-    client.rebalance(&symbol_short!("blend"), &700_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &700_i128, &0_i128);
 
     let expiration = token_client.allowance_expiration(&contract_id, &blend_pool);
     let allowance = token_client.allowance(&contract_id, &blend_pool);

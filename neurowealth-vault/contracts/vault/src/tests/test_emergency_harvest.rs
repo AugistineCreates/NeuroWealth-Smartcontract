@@ -28,7 +28,7 @@ fn setup_with_deployed_funds(env: &Env) -> (Address, Address, Address, Address, 
     mint_and_deposit(env, &client, &usdc_token, &user, 10_000_000_i128);
 
     // Move all idle funds into Blend so harvest has something to compound.
-    client.rebalance(&symbol_short!("blend"), &850_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &850_i128, &0_i128);
 
     (contract_id, _agent, owner, usdc_token, blend_pool)
 }
@@ -175,13 +175,13 @@ fn test_emergency_harvest_works_after_circuit_breaker_pause() {
     mint_and_deposit(&env, &client, &usdc_token, &user, 10_000_000_i128);
 
     // Move funds into Blend so we have something to harvest later.
-    client.rebalance(&symbol_short!("blend"), &850_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &850_i128, &0_i128);
 
     // Trip the circuit breaker (3 consecutive failures).
     blend_client.set_max_supply_limit(&-1_i128);
-    client.rebalance(&symbol_short!("blend"), &500_i128, &0_i128);
-    client.rebalance(&symbol_short!("blend"), &500_i128, &0_i128);
-    client.rebalance(&symbol_short!("blend"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &500_i128, &0_i128);
     assert!(client.is_paused(), "circuit breaker must pause");
 
     // Owner can still harvest to compound any remaining yield before

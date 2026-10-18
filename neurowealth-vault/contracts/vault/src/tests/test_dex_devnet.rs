@@ -23,9 +23,9 @@ fn test_dex_production_entrypoints_on_mock_pool() {
     let user = Address::generate(&env);
     mint_and_deposit(&env, &client, &usdc_token, &user, 5_000_000_i128);
 
-    client.rebalance(&symbol_short!("dex"), &850_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("dex"), &850_i128, &0_i128);
     assert_eq!(client.get_current_protocol(), symbol_short!("dex"));
 
-    client.rebalance(&symbol_short!("none"), &0_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("none"), &0_i128, &0_i128);
     assert_eq!(client.get_current_protocol(), symbol_short!("none"));
 }

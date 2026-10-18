@@ -319,5 +319,5 @@ fn test_rebalance_basic() {
     let protocol = soroban_sdk::symbol_short!("none");
     let expected_apy = 850_i128;
 
-    client.rebalance(&protocol, &expected_apy, &0_i128);
+    client.rebalance(&_agent, &protocol, &expected_apy, &0_i128);
 }

@@ -195,7 +195,7 @@ fn test_event_schema_rebalance_events() {
     // Test rebalance event
     let protocol = symbol_short!("none");
     let expected_apy = 850_i128;
-    client.rebalance(&protocol, &expected_apy, &0_i128);
+    client.rebalance(&_agent, &protocol, &expected_apy, &0_i128);
 
     let rebalance_events = find_events_by_topic(env.events().all(), &env, TOPIC_REBALANCE);
     assert_eq!(
@@ -260,7 +260,7 @@ fn test_event_schema_protocol_changed_events() {
     let user = Address::generate(&env);
     mint_and_deposit(&env, &client, &usdc_token, &user, 10_000_000_i128);
 
-    client.rebalance(&symbol_short!("blend"), &1200_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &1200_i128, &0_i128);
 
     let proto_events = find_events_by_topic(env.events().all(), &env, TOPIC_PROTOCOL_CHANGED);
     assert_eq!(
@@ -275,7 +275,7 @@ fn test_event_schema_protocol_changed_events() {
     assert_eq!(proto_event.old_protocol, symbol_short!("none"));
     assert_eq!(proto_event.new_protocol, symbol_short!("blend"));
 
-    client.rebalance(&symbol_short!("none"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("none"), &500_i128, &0_i128);
 
     let proto_events = find_events_by_topic(env.events().all(), &env, TOPIC_PROTOCOL_CHANGED);
     assert_eq!(
@@ -443,7 +443,7 @@ fn test_event_schema_blend_events() {
     mint_and_deposit(&env, &client, &usdc_token, &user, 10_000_000_i128);
 
     // Test rebalance to blend (should emit BlendSupplyEvent)
-    client.rebalance(&symbol_short!("blend"), &1200_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &1200_i128, &0_i128);
 
     let supply_events = find_events_by_topic(env.events().all(), &env, TOPIC_BLEND_SUPPLY);
     assert_eq!(
@@ -462,7 +462,7 @@ fn test_event_schema_blend_events() {
     assert!(supply_event.success);
 
     // Test rebalance back to none (should emit BlendWithdrawEvent)
-    client.rebalance(&symbol_short!("none"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("none"), &500_i128, &0_i128);
 
     let withdraw_events = find_events_by_topic(env.events().all(), &env, TOPIC_BLEND_WITHDRAW);
     assert_eq!(

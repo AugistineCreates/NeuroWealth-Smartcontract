@@ -175,7 +175,7 @@ fn snapshot_rebalance_event_all_fields_noop() {
 
     let protocol = symbol_short!("none");
     let expected_apy: i128 = 500;
-    client.rebalance(&protocol, &expected_apy, &0_i128);
+    client.rebalance(&_agent, &protocol, &expected_apy, &0_i128);
 
     let events = find_events_by_topic(env.events().all(), &env, TOPIC_REBALANCE);
     assert_eq!(events.len(), 1, "exactly one RebalanceEvent expected");
@@ -209,7 +209,7 @@ fn snapshot_rebalance_event_with_blend_supply() {
     mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
 
     // Rebalance to Blend: should show amount_supplied
-    client.rebalance(&symbol_short!("blend"), &950_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &950_i128, &0_i128);
 
     let events = find_events_by_topic(env.events().all(), &env, TOPIC_REBALANCE);
     assert_eq!(events.len(), 1, "exactly one RebalanceEvent expected");
@@ -243,10 +243,10 @@ fn snapshot_rebalance_event_with_blend_withdrawal() {
     mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
 
     // First supply to Blend
-    client.rebalance(&symbol_short!("blend"), &1100_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &1100_i128, &0_i128);
 
     // Then withdraw from Blend: should show amount_withdrawn
-    client.rebalance(&symbol_short!("none"), &0_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("none"), &0_i128, &0_i128);
 
     let events = find_events_by_topic(env.events().all(), &env, TOPIC_REBALANCE);
     assert_eq!(events.len(), 2, "two RebalanceEvents expected");
@@ -623,7 +623,7 @@ fn snapshot_dex_supply_event_all_fields() {
     mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
 
     // Supply to the DEX: emits DexSupplyEvent with the full amount.
-    client.rebalance(&symbol_short!("dex"), &950_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("dex"), &950_i128, &0_i128);
 
     let events = find_events_by_topic(env.events().all(), &env, TOPIC_DEX_SUPPLY);
     assert_eq!(events.len(), 1, "exactly one DexSupplyEvent expected");
@@ -654,8 +654,8 @@ fn snapshot_dex_withdraw_event_all_fields() {
     mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
 
     // Supply to the DEX, then exit by rebalancing to "none": emits DexWithdrawEvent.
-    client.rebalance(&symbol_short!("dex"), &1100_i128, &0_i128);
-    client.rebalance(&symbol_short!("none"), &0_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("dex"), &1100_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("none"), &0_i128, &0_i128);
 
     let events = find_events_by_topic(env.events().all(), &env, TOPIC_DEX_WITHDRAW);
     assert_eq!(events.len(), 1, "exactly one DexWithdrawEvent expected");

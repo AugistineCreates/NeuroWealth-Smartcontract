@@ -971,7 +971,7 @@ fn test_agent_rebalance_cannot_touch_user_shares() {
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
     let victim_shares = client.get_shares(&victim);
 
-    client.rebalance(&symbol_short!("none"), &500_i128, &0_i128);
+    client.rebalance(&agent, &symbol_short!("none"), &500_i128, &0_i128);
 
     assert_eq!(client.get_shares(&victim), victim_shares);
     assert_eq!(client.get_owner(), owner);
@@ -984,7 +984,7 @@ fn test_agent_submit_mev_report_cannot_steal() {
     let victim_shares = client.get_shares(&victim);
     let assets = client.get_total_assets();
 
-    client.submit_mev_report(&symbol_short!("blend"), &1_i128, &0_i128);
+    client.submit_mev_report(&_agent, &symbol_short!("blend"), &1_i128, &0_i128);
 
     assert_eq!(client.get_shares(&victim), victim_shares);
     assert_eq!(client.get_total_assets(), assets);
@@ -996,15 +996,18 @@ fn test_agent_submit_apy_prediction_cannot_steal() {
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
     let victim_shares = client.get_shares(&victim);
 
-    client.submit_apy_prediction(&ApyPrediction {
-        protocol: symbol_short!("blend"),
-        predicted_apy_bps: 800,
-        apy_1h_bps: 800,
-        apy_6h_bps: 800,
-        apy_24h_bps: 800,
-        confidence_bps: 9_000,
-        submitted_at_ledger: 0,
-    });
+    client.submit_apy_prediction(
+        &_agent,
+        &ApyPrediction {
+            protocol: symbol_short!("blend"),
+            predicted_apy_bps: 800,
+            apy_1h_bps: 800,
+            apy_6h_bps: 800,
+            apy_24h_bps: 800,
+            confidence_bps: 9_000,
+            submitted_at_ledger: 0,
+        },
+    );
 
     assert_eq!(client.get_shares(&victim), victim_shares);
 }
@@ -1033,7 +1036,7 @@ fn test_random_user_cannot_impersonate_agent_rebalance() {
         (symbol_short!("none"), 500_i128, 0_i128).into_val(&env),
     );
     let accepted = client
-        .try_rebalance(&symbol_short!("none"), &500_i128, &0_i128)
+        .try_rebalance(&victim, &symbol_short!("none"), &500_i128, &0_i128)
         .is_ok();
     env.mock_all_auths();
     assert!(!accepted, "non-agent must not rebalance");
