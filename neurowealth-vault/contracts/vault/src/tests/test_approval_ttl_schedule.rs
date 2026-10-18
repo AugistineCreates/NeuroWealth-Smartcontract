@@ -7,7 +7,7 @@
 
 use super::utils::*;
 use crate::{
-    APPROVAL_RENEWAL_LEAD_LEDGERS, ProtocolApprovalScheduledEvent, TOPIC_APPROVAL_TTL_SCHEDULED,
+    ProtocolApprovalScheduledEvent, APPROVAL_RENEWAL_LEAD_LEDGERS, TOPIC_APPROVAL_TTL_SCHEDULED,
 };
 use soroban_sdk::{
     symbol_short,
@@ -159,7 +159,10 @@ fn test_blend_approval_ttl_emits_schedule_scoped_to_blend() {
     assert_eq!(event.protocol, symbol_short!("blend"));
     assert_eq!(event.approval_ttl, ttl);
     assert_eq!(event.expiry_ledger, env.ledger().sequence() + ttl);
-    assert_eq!(event.renewal_deadline_ledger, event.expiry_ledger - event.lead_time);
+    assert_eq!(
+        event.renewal_deadline_ledger,
+        event.expiry_ledger - event.lead_time
+    );
 }
 
 /// Publishing the schedule must not extend or renew anything: no pool
