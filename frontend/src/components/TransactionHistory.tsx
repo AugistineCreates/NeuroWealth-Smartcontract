@@ -126,6 +126,7 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({ transact
           <select
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value as FilterType)}
+            aria-label="Filter transactions by type"
             className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
           >
             <option value="all">All Types</option>
@@ -144,6 +145,7 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({ transact
               setSortField(field as SortField);
               setSortDirection(dir as SortDirection);
             }}
+            aria-label="Sort transactions"
             className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
           >
             <option value="timestamp-desc">Newest First</option>
@@ -158,6 +160,7 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({ transact
           <select
             value={earningsPeriod}
             onChange={(e) => setEarningsPeriod(e.target.value as EarningsPeriod)}
+            aria-label="Filter earnings by time period"
             className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
           >
             <option value="daily">24h</option>
@@ -176,11 +179,11 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({ transact
         <table className="w-full text-left border-collapse text-sm">
           <thead>
             <tr className="border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider">
-              <th className="py-3 px-4">Type</th>
-              <th className="py-3 px-4">Amount</th>
-              <th className="py-3 px-4">Tx Hash</th>
-              <th className="py-3 px-4">Date / Time</th>
-              <th className="py-3 px-4 text-right">Status</th>
+              <th scope="col" className="py-3 px-4">Type</th>
+              <th scope="col" className="py-3 px-4">Amount</th>
+              <th scope="col" className="py-3 px-4">Tx Hash</th>
+              <th scope="col" className="py-3 px-4">Date / Time</th>
+              <th scope="col" className="py-3 px-4 text-right">Status</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/60 font-mono text-xs">
@@ -233,7 +236,7 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({ transact
       </div>
 
       {filteredTransactions.length === 0 && (
-        <div className="text-center py-8 text-slate-400 text-sm">
+        <div className="text-center py-8 text-slate-400 text-sm" role="status" aria-live="polite">
           No transactions match the selected filter.
         </div>
       )}
