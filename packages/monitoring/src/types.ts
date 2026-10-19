@@ -49,7 +49,6 @@ export interface HealthMetrics {
   insuranceFundBalance?: number | bigint;
   pendingUpgrade?: PendingTimelock;
   pendingAgent?: PendingTimelock;
-  insuranceFundBalance?: number;
 }
 
 export interface PendingTimelock {
