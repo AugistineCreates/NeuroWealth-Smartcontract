@@ -5304,7 +5304,7 @@ impl NeuroWealthVault {
     /// This function is marked for removal in the next major version.
     /// See DEPRECATION.md for migration guidance.
     #[deprecated(
-        since = "1.x",
+        since = "0.1.0",
         note = "Use set_caps() or set_deposit_limits() instead. See DEPRECATION.md"
     )]
     pub fn set_limits(env: Env, min: i128, max: i128) -> Result<(), VaultError> {
