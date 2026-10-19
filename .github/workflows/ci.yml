@@ -556,6 +556,9 @@ jobs:
       - name: Verify DataKey docs match lib.rs
         run: bash scripts/check-data-key-docs.sh
 
+      - name: Verify every test_*.rs file is registered in tests/mod.rs
+        run: bash scripts/check-test-registration.sh
+
   changes:
     name: Detect changes
     runs-on: ubuntu-latest
