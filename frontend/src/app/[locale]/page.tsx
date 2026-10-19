@@ -52,7 +52,7 @@ export default function DashboardPage() {
     setError(null);
   };
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (signal?: AbortSignal) => {
     if (!publicKey) return;
 
     setLoading(true);
@@ -66,6 +66,8 @@ export default function DashboardPage() {
         getRecentTransactions(publicKey),
       ]);
 
+      if (signal?.aborted) return;
+
       if (!stateResult.ok) {
         throw new Error(stateResult.error);
       }
@@ -75,16 +77,21 @@ export default function DashboardPage() {
       setChartData(chart);
       setTransactions(txs);
     } catch (err) {
+      if (signal?.aborted) return;
       console.error('Failed to load dashboard data:', err);
       setError(err instanceof Error ? err.message : 'Failed to load dashboard data. Please try again.');
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
     }
   }, [publicKey]);
 
   useEffect(() => {
+    const abortController = new AbortController();
+
     if (publicKey) {
-      loadData();
+      loadData(abortController.signal);
     } else {
       setVaultState({ balance: 0, strategy: 'Balanced', exchangeRate: 1.042, apy: 8.4 });
       setEarnings({ today: 0, week: 0, month: 0 });
@@ -92,6 +99,10 @@ export default function DashboardPage() {
       setTransactions([]);
       setError(null);
     }
+
+    return () => {
+      abortController.abort();
+    };
   }, [publicKey, loadData]);
 
   const openModal = (type: 'deposit' | 'withdraw') => {
@@ -133,7 +144,7 @@ export default function DashboardPage() {
               <AlertTriangle size={18} />
               <span className="text-sm flex-1">{error}</span>
               <button
-                onClick={loadData}
+                onClick={() => loadData()}
                 className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/30 transition-colors"
               >
                 <RefreshCw size={12} />
@@ -142,7 +153,7 @@ export default function DashboardPage() {
             </div>
           )}
 
-          <ErrorBoundary surfaceName="portfolio" onReset={loadData}>
+          <ErrorBoundary surfaceName="portfolio" onReset={() => loadData()}>
             <section id="dashboard" className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {loading ? (
                 <>
@@ -175,7 +186,7 @@ export default function DashboardPage() {
             </section>
           </ErrorBoundary>
 
-          <ErrorBoundary surfaceName="strategies" onReset={loadData}>
+          <ErrorBoundary surfaceName="strategies" onReset={() => loadData()}>
             <section id="strategies">
               {loading ? (
                 <div className="glass-panel rounded-2xl p-6 h-64 flex items-center justify-center">
@@ -193,14 +204,14 @@ export default function DashboardPage() {
 
           <section id="history" className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2">
-              <ErrorBoundary surfaceName="transactions" onReset={loadData}>
+              <ErrorBoundary surfaceName="transactions" onReset={() => loadData()}>
                 {loading ? (
                   <div className="glass-panel rounded-2xl p-6 h-48 flex items-center justify-center">
                     <Loader2 className="animate-spin text-emerald-400" size={24} />
                   </div>
-                ) : (
+                ) : publicKey ? (
                   <TransactionHistory transactions={transactions} />
-                )}
+                ) : null}
               </ErrorBoundary>
             </div>
 
