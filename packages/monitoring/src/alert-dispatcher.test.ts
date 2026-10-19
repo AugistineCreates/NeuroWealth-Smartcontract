@@ -163,8 +163,13 @@ describe("AlertDispatcher", () => {
 
       mockedAxios.post.mockClear();
 
+      const warningSlackWebhook: AlertWebhook = {
+        ...slackWebhook!,
+        severity: "warning",
+      };
+      const warningSlackDispatcher = new AlertDispatcher([warningSlackWebhook]);
       const warningAlert = { ...testAlert, severity: "warning" as const };
-      await slackDispatcher.dispatch(warningAlert);
+      await warningSlackDispatcher.dispatch(warningAlert);
 
       payload = mockedAxios.post.mock.calls[0][1] as Record<string, any>;
       expect(payload.text).toContain("⚠️");

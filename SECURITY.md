@@ -194,7 +194,8 @@ The AI agent can move funds between protocols via `rebalance()`, but is constrai
 The contract owner can upgrade the contract code. To protect against malicious or accidental instant code changes, upgrade risk is mitigated via a mandatory two-step timelock mechanism:
 - **Two-Step Timelock**: Upgrades must first be scheduled via `schedule_upgrade(new_wasm_hash)`, initiating a timelock delay before `execute_upgrade()` can be called.
 - **Cancellation Window**: During the timelock window, the owner or security monitoring can invoke `cancel_upgrade()` to abort a compromised or erroneous upgrade proposal.
-- **Owner Multi-Sig Recommended**: For mainnet deployment, owner authority should be held by a multi-sig account.
+- **Owner Multi-Sig Governance**: For mainnet deployment, owner authority must be held by a Stellar native multi-sig account (e.g. 2-of-3 threshold).
+- **Guardian Key Evaluation & Formal Deferral (Issues #607, #922)**: A contract-level second-signature pattern (`DataKey::Guardian` gating `execute_upgrade`) was evaluated in [`docs/GUARDIAN_KEY_DESIGN.md`](docs/GUARDIAN_KEY_DESIGN.md) and formally deferred in favor of native Stellar protocol multi-sig. Native multi-sig protects all owner actions at the ledger level rather than adding bespoke contract logic for upgrades alone.
 
 ### 5. State Rent & TTL Expiry
 
@@ -321,12 +322,9 @@ This register documents every owner-only and agent-only capability, the blast ra
 | set_queue_config | yes | - | - | - |
 | process_withdrawal_queue | - | - | - | anyone (authenticated) |
 | submit_mev_report | - | yes | - | - |
-| get_mev_stats | - | - | - | anyone |
 | set_max_acceptable_mev_loss | yes | - | - | - |
 | submit_apy_prediction | - | yes | - | - |
-| get_apy_prediction | - | - | - | anyone |
-| get_vault_health_snapshot | - | - | - | anyone |
-| get_withdrawal_eligibility | - | - | - | anyone |
+
 
 ### Timelock and Pause Behavior for Newer Privileged Functions (Issue #997)
 
@@ -490,8 +488,12 @@ operators from assessing vault state.
 | `preview_withdraw` | 🟢 ALLOWED |
 | `convert_to_shares` | 🟢 ALLOWED |
 | `convert_to_assets` | 🟢 ALLOWED |
+| `get_min_holding_period` | 🟢 ALLOWED |
+| `get_mev_stats` | 🟢 ALLOWED |
+| `get_apy_prediction` | 🟢 ALLOWED |
 | `get_vault_health_snapshot` | 🟢 ALLOWED |
 | `get_withdrawal_eligibility` | 🟢 ALLOWED |
+
 
 ### Note on Withdrawal Semantics
 
@@ -874,6 +876,72 @@ codes, since an over-limit transaction itself is reverted by the host.
   cap, user deposit cap, fee policy, and authentication checks as the sybil
   resistance layer.
 
+## WhatsApp Custodial Key Custody Threat Model (Issue #944)
+
+The WhatsApp bot (`whatsapp/`) creates a custodial Stellar keypair per verified
+phone number and signs vault transactions on the user's behalf. Unlike the
+vault contract, these keys are held by the operator, so this section records
+what is protected, from whom, and what is explicitly **not** protected.
+Operational detail is in [docs/WHATSAPP_BOT.md](docs/WHATSAPP_BOT.md#custodial-key-custody-and-rotation-944).
+
+### Assets
+
+| Asset | Where it lives | Sensitivity |
+| --- | --- | --- |
+| User Stellar secret key | `whatsapp_wallets` (`encrypted_data`, `iv`, `tag`), AES-256-GCM encrypted | Critical: controls the user's vault position and any other funds in the account |
+| Data-encryption key (DEK), one per wallet | `whatsapp_wallets.wrapped_dek` wrapped by the KEK | Critical, but useless without the KEK |
+| Key-encryption key (KEK) | `ENCRYPTION_KEY` (+ `ENCRYPTION_KEY_RETIRED` during rotation) in the process environment / secret store | Critical: the single secret that unlocks every DEK |
+| Phone-hash salt | `PHONE_HASH_SALT` | Medium: protects phone-number privacy |
+| OTP challenges, sessions | `whatsapp_otps`, `whatsapp_sessions` | Medium: an exposed live OTP allows an account takeover for up to 5 minutes |
+
+### Design
+
+- **Envelope encryption.** Each secret has its own random DEK; the DEK is
+  wrapped with the KEK (AES-256-GCM, version label bound as AAD). Database
+  contents alone (dump, backup, SQL injection, replica access) reveal no
+  usable key material.
+- **KEK rotation without re-exposing secrets.** `npm run rotate-keys` re-wraps
+  DEKs under a new `ENCRYPTION_KEY_VERSION`; Stellar secrets are never
+  re-encrypted or logged. Old KEKs are kept only in `ENCRYPTION_KEY_RETIRED`
+  until rotation completes. Runbook: docs/WHATSAPP_BOT.md.
+- **Isolation seam for KMS/HSM.** KEK access is confined to `wrapDek` /
+  `unwrapDek`; a managed key service can replace the env-var KEK without
+  touching storage or callers.
+- **Fail-closed configuration.** The service refuses to boot with a missing,
+  short, placeholder or default secret (`src/envGuard.ts`), and CI forbids
+  source-level fallbacks (see the policy below).
+- **Plaintext handling.** The decrypted secret exists only inside
+  `getDecryptedSecretKey` for the duration of signing; it is never persisted,
+  returned to chat, or logged.
+
+### Adversaries and residual risk
+
+| # | Adversary / event | Outcome today | Mitigation / residual risk |
+| --- | --- | --- | --- |
+| 1 | Reads or steals the database (SQLi, leaked backup, over-broad replica access) | Gets ciphertext, wrapped DEKs, public keys, hashed phones. **Cannot** decrypt without the KEK | Protected, provided the KEK is stored separately from DB backups |
+| 2 | Reads the bot's environment (host compromise, leaked CI/deploy secrets, debug endpoint, crash dump) | Obtains the KEK and, with DB access, can unwrap **every** DEK | **Not mitigated by env-var custody.** Limit who can read the secret store, keep the KEK out of logs/CI, and move to KMS/HSM (non-exportable KEK, per-call audit, rate alarms) before holding material funds |
+| 3 | Full compromise of a running replica | Can call the signing path for any wallet while it runs | Not preventable at the application layer. Contain with network egress limits, short-lived credentials, per-user vault deposit caps (`VAULT_USER_DEPOSIT_CAP`), and incident response (docs/INCIDENT_RESPONSE.md) |
+| 4 | Operator / insider with both DB and secret-store access | Full custody of all users' keys | Inherent to custodial design. Separate duties between DB and secret-store admins; KMS/HSM audit logs; users should be told the wallet is custodial |
+| 5 | KEK exposure discovered later (leak, ex-employee) | Past DB copies remain decryptable by the leaked KEK | Rotate (runbook) to protect future copies. Wallets whose ciphertext was captured together with the KEK must be considered compromised: move funds to fresh wallets |
+| 6 | Loss of the KEK | Every custodial secret is permanently unrecoverable | Escrow the KEK (and retired KEKs until rotation completes) in a secret manager with backup and access review; test restores |
+| 7 | Tampering with `key_version` / ciphertext | Fails GCM authentication (version is AAD of the DEK wrap) | Detected; the wallet becomes unusable rather than signing with a wrong key |
+| 8 | Phone-number takeover (SIM swap) or interception of the OTP | Attacker verifies as the victim and gets that number's session | OTP is currently echoed in the chat reply and therefore proves nothing about phone control. Deliver the OTP out of band (SMS / Twilio Verify) before real funds |
+| 9 | OTP brute force across replicas | Attempts are counted atomically in Postgres, so parallel guesses cannot exceed the limit; 3 attempts / 5 minutes | Bounded |
+| 10 | Replayed or forged webhooks | Forged requests fail Twilio signature validation; replays are deduplicated by `MessageSid` and never re-run state-changing commands | Bounded; see docs/WHATSAPP_BOT.md |
+| 11 | Weak or placeholder secrets in a deployment | Service refuses to start (`envGuard`); legacy fixed-salt derivation is only used to read old rows and is upgraded by `rotate-keys` | Run `rotate-keys` once after deploying to retire the legacy format |
+
+### Out of scope
+
+Compromise of the Stellar network or the vault contract (covered by the vault
+threat model above), and endpoint security of users' own phones.
+
+### Rotation cadence and triggers
+
+Rotate the KEK at least every 12 months and immediately on: any suspected
+exposure of the secret store or a replica, departure of someone with access to
+it, or a change of secret-store provider. Record each rotation (date, old/new
+version, operator) in the operations log.
+
 ## Deployment Configuration Fail-Closed Policy
 
 Production-sensitive defaults must not be embedded in application source. The WhatsApp encryption key, phone hashing salt, and vault contract identifiers must come from deployment environment variables. If any of these values are missing, the affected service should fail during startup rather than silently falling back to a shared development secret or stale testnet contract id.
@@ -884,7 +952,11 @@ Required fail-closed values:
 
 | Variable | Used by | Risk if defaulted |
 | --- | --- | --- |
-| `ENCRYPTION_KEY` | WhatsApp custodial secret encryption | Shared fallback key could decrypt every stored user signing secret |
+| `ENCRYPTION_KEY` | WhatsApp custodial key-encryption key (see [custody threat model](#whatsapp-custodial-key-custody-threat-model-issue-944)) | Shared fallback key could decrypt every stored user signing secret |
 | `PHONE_HASH_SALT` | WhatsApp phone-number hashing | Shared fallback salt weakens PII privacy and cross-environment isolation |
+| `DATABASE_URL` | WhatsApp wallet, OTP and session storage | A default `postgres:postgres@localhost` credential could point production at an unintended or weakly protected database |
+| `TWILIO_AUTH_TOKEN` | WhatsApp webhook signature validation | A default token would let anyone forge signed webhooks |
 | `VAULT_CONTRACT_ID` | WhatsApp vault routing | Bot could submit or simulate against a stale contract |
 | `NEXT_PUBLIC_VAULT_CONTRACT_ID` | Frontend vault reads | UI could display balances or submit flows against a stale contract |
+
+At runtime the WhatsApp service enforces the same policy: `whatsapp/src/bootstrapEnv.ts` (first import of every entry point) runs `assertEnv()` from `whatsapp/src/envGuard.ts` and aborts the boot with a list of every missing, too-short, placeholder or default value, and refuses `TWILIO_SKIP_SIGNATURE_VALIDATION=true` under `NODE_ENV=production` (Issue #945). `check-no-production-defaults.py` additionally fails CI if an entry point stops importing the guard.

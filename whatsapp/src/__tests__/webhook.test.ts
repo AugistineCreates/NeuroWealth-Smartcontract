@@ -95,6 +95,9 @@ import { test, describe, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { VaultClient } from '@neurowealth/vault-client';
 import { handleWhatsAppWebhook } from '../webhook';
+import { InMemoryStateStore, setStateStore } from '../stateStore';
+
+setStateStore(new InMemoryStateStore());
 import { INPUT_LIMITS, SAFE_OVERSIZE_REPLY, SAFE_STRATEGY_REPLY, SAFE_MALFORMED_REPLY } from '../inputBounds';
 
 const FAKE_TX_HASH = 'b'.repeat(64);
@@ -218,6 +221,40 @@ describe('webhook – AWAITING_OTP state', () => {
     await handleWhatsAppWebhook(makeReq(phone, 'hi'), makeRes());
     await handleWhatsAppWebhook(makeReq(phone, 'please verify me'), makeRes());
     assert.match(lastBody, /6.digit/i);
+  });
+
+  test('"hi" in AWAITING_OTP generates a new OTP code (#1002)', async () => {
+    const phone = nextPhone();
+    await handleWhatsAppWebhook(makeReq(phone, 'hi'), makeRes());
+    const firstOtp = lastBody.match(/(\d{6})/)![1];
+
+    // Send "hi" again to get a new OTP
+    await handleWhatsAppWebhook(makeReq(phone, 'hi'), makeRes());
+    const secondOtp = lastBody.match(/(\d{6})/)![1];
+
+    assert.notEqual(firstOtp, secondOtp, 'New OTP should be generated');
+    assert.match(lastBody, /new otp/i);
+  });
+
+  test('lockout after max attempts allows recovery via "hi" (#1002)', async () => {
+    const phone = nextPhone();
+    await handleWhatsAppWebhook(makeReq(phone, 'hi'), makeRes());
+
+    // Exhaust all attempts (3 wrong codes)
+    await handleWhatsAppWebhook(makeReq(phone, '000000'), makeRes());
+    await handleWhatsAppWebhook(makeReq(phone, '000000'), makeRes());
+    await handleWhatsAppWebhook(makeReq(phone, '000000'), makeRes());
+    await handleWhatsAppWebhook(makeReq(phone, '000000'), makeRes());
+    assert.match(lastBody, /too many/i);
+
+    // Recover by sending "hi"
+    await handleWhatsAppWebhook(makeReq(phone, 'hi'), makeRes());
+    const newOtp = lastBody.match(/(\d{6})/)![1];
+    assert.ok(newOtp, 'New OTP should be generated after lockout');
+
+    // Verify with new OTP
+    await handleWhatsAppWebhook(makeReq(phone, newOtp), makeRes());
+    assert.match(lastBody, /verified/i);
   });
 });
 

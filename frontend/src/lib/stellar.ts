@@ -10,6 +10,10 @@ import {
 export type { VaultState };
 export { EMPTY_VAULT_STATE };
 
+export type VaultStateResult =
+  | { ok: true; state: VaultState }
+  | { ok: false; error: string };
+
 function requirePublicEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
@@ -52,9 +56,9 @@ export async function simulateContractCall(
   return scValToNative(sim.result.retval);
 }
 
-export async function fetchVaultState(userAddress?: string): Promise<VaultState> {
+export async function fetchVaultState(userAddress?: string): Promise<VaultStateResult> {
   if (!userAddress) {
-    return { ...EMPTY_VAULT_STATE };
+    return { ok: true, state: { ...EMPTY_VAULT_STATE } };
   }
 
   try {
@@ -68,16 +72,25 @@ export async function fetchVaultState(userAddress?: string): Promise<VaultState>
       simulateContractCall('get_total_shares', [], userAddress),
     ]);
 
-    return deriveVaultState({
+    const failedCall = [balanceRes, strategyRes, exchangeRateRes, totalAssetsRes, totalSharesRes]
+      .find((result) => result.status === 'rejected');
+    if (failedCall?.status === 'rejected') {
+      throw failedCall.reason;
+    }
+
+    return { ok: true, state: deriveVaultState({
       balance: balanceRes.status === 'fulfilled' ? Number(balanceRes.value) / 1e7 : 0,
       rawStrategy: strategyRes.status === 'fulfilled' ? String(strategyRes.value) : '',
       exchangeRateRaw: exchangeRateRes.status === 'fulfilled' ? Number(exchangeRateRes.value) / 1e7 : 0,
       totalAssets: totalAssetsRes.status === 'fulfilled' ? Number(totalAssetsRes.value) / 1e7 : 0,
       totalShares: totalSharesRes.status === 'fulfilled' ? Number(totalSharesRes.value) / 1e7 : 0,
-    });
+    }) };
   } catch (err) {
     console.warn('Failed to fetch vault state from Soroban RPC:', err);
-    return { ...EMPTY_VAULT_STATE };
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Unable to fetch vault state from Soroban RPC.',
+    };
   }
 }
 

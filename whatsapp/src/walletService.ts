@@ -1,14 +1,10 @@
 import { Keypair } from '@stellar/stellar-sdk';
-import { encryptSecretKey, decryptSecretKey } from './cryptoUtils';
+import { encryptSecretKey, decryptSecretKey, EncryptedSecret } from './cryptoUtils';
 import { query } from './db';
 
 export interface UserWallet {
   publicKey: string;
-  encryptedSecret: {
-    encryptedData: string;
-    iv: string;
-    tag: string;
-  };
+  encryptedSecret: EncryptedSecret;
   createdAt: number;
 }
 
@@ -42,17 +38,22 @@ export async function createCustodialWallet(phoneHash: string): Promise<Custodia
   const createdAt = Date.now();
 
   const result = await query(
-    `INSERT INTO whatsapp_wallets (phone_hash, public_key, encrypted_data, iv, tag, created_at)
-     VALUES ($1, $2, $3, $4, $5, to_timestamp($6 / 1000.0))
+    `INSERT INTO whatsapp_wallets
+       (phone_hash, public_key, encrypted_data, iv, tag, created_at, wrapped_dek, dek_iv, dek_tag, key_version)
+     VALUES ($1, $2, $3, $4, $5, to_timestamp($6 / 1000.0), $7, $8, $9, $10)
      ON CONFLICT (phone_hash) DO NOTHING
-     RETURNING public_key, encrypted_data, iv, tag, created_at`,
+     RETURNING public_key, encrypted_data, iv, tag, created_at, wrapped_dek, dek_iv, dek_tag, key_version`,
     [
       phoneHash,
       publicKey,
       encryptedSecret.encryptedData,
       encryptedSecret.iv,
       encryptedSecret.tag,
-      createdAt
+      createdAt,
+      encryptedSecret.wrappedDek,
+      encryptedSecret.dekIv,
+      encryptedSecret.dekTag,
+      encryptedSecret.keyVersion
     ]
   );
 
@@ -87,7 +88,12 @@ export async function getWallet(phoneHash: string): Promise<UserWallet | undefin
     encryptedSecret: {
       encryptedData: row.encrypted_data,
       iv: row.iv,
-      tag: row.tag
+      tag: row.tag,
+      // NULL for rows written before envelope encryption (#944).
+      wrappedDek: row.wrapped_dek ?? undefined,
+      dekIv: row.dek_iv ?? undefined,
+      dekTag: row.dek_tag ?? undefined,
+      keyVersion: row.key_version ?? undefined
     },
     createdAt: new Date(row.created_at).getTime()
   };
@@ -103,6 +109,7 @@ export async function getDecryptedSecretKey(phoneHash: string): Promise<string |
   return decryptSecretKey(
     wallet.encryptedSecret.encryptedData,
     wallet.encryptedSecret.iv,
-    wallet.encryptedSecret.tag
+    wallet.encryptedSecret.tag,
+    wallet.encryptedSecret
   );
 }

@@ -58,9 +58,13 @@ export function ApprovalTTL({ client, signer }: ApprovalTTLProps) {
 
       // Poll for confirmation
       const server = getSorobanServer(network);
+      const txHash = result?.hash;
+      if (!txHash) {
+        throw new Error("Transaction hash missing");
+      }
       for (let i = 0; i < 60; i++) {
         try {
-          const tx = await server.getTransaction(result.hash);
+          const tx = await server.getTransaction(txHash);
           if (tx.status === "SUCCESS") break;
         } catch {
           // Not confirmed yet

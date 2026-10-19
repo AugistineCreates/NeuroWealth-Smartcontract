@@ -46,6 +46,7 @@ export interface HealthMetrics {
   sharePrice: number;
   tvlCap: bigint;
   userDepositCap: bigint;
+  insuranceFundBalance?: number | bigint;
   pendingUpgrade?: PendingTimelock;
   pendingAgent?: PendingTimelock;
   insuranceFundBalance?: number;

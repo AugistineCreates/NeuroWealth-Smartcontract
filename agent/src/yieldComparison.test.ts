@@ -168,22 +168,44 @@ describe('ingestLiveApys fixtures', () => {
 });
 
 describe('evaluateYield (#467)', () => {
-  it('moves balanced funds to the higher-yielding DEX', async () => {
-    assert.deepStrictEqual(await evaluateYield('balanced', 'blend', 6.5), {
+  it('moves balanced funds to the higher-yielding DEX when real APYs are available', async () => {
+    // Mock the fetch functions to return real values
+    const { fetchBlendApy, fetchDexApy } = await import('./yieldComparison');
+    // When live protocols are provided, it uses those instead of the fallback functions
+    const liveProtocols = [
+      fixtureProtocol('blend', 0.065),
+      fixtureProtocol('dex', 0.082),
+    ];
+    assert.deepStrictEqual(await evaluateYield('balanced', 'blend', 6.5, liveProtocols), {
       shouldRebalance: true,
       targetProtocol: 'dex',
     });
   });
 
   it('keeps conservative strategies on Blend', async () => {
-    assert.deepStrictEqual(await evaluateYield('conservative', 'none', 0), {
+    const liveProtocols = [
+      fixtureProtocol('blend', 0.065),
+      fixtureProtocol('dex', 0.082),
+    ];
+    assert.deepStrictEqual(await evaluateYield('conservative', 'none', 0, liveProtocols), {
       shouldRebalance: true,
       targetProtocol: 'blend',
     });
-    assert.strictEqual((await evaluateYield('conservative', 'blend', 6.5)).shouldRebalance, false);
+    assert.strictEqual((await evaluateYield('conservative', 'blend', 6.5, liveProtocols)).shouldRebalance, false);
   });
 
   it('does not rebalance below the 0.5pp improvement threshold', async () => {
-    assert.strictEqual((await evaluateYield('growth', 'blend', 7.8)).shouldRebalance, false);
+    const liveProtocols = [
+      fixtureProtocol('blend', 0.078),
+      fixtureProtocol('dex', 0.082),
+    ];
+    assert.strictEqual((await evaluateYield('growth', 'blend', 7.8, liveProtocols)).shouldRebalance, false);
+  });
+
+  it('does not rebalance when fetch functions return null (fail-safe #1003)', async () => {
+    // Without live protocols, evaluateYield calls fetchBlendApy and fetchDexApy
+    // These return null when not configured or on error, triggering the fail-safe
+    const result = await evaluateYield('balanced', 'blend', 6.5);
+    assert.strictEqual(result.shouldRebalance, false);
   });
 });

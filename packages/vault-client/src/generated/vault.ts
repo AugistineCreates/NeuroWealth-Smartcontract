@@ -110,10 +110,10 @@ export interface RebalanceEvent {
 
 /** Emitted by the contract. */
 export interface HarvestEvent {
-  /** The protocol harvested from (e.g., "blend", "dex") */
+  /** The protocol harvested from ("blend", "dex", or "multi") */
   protocol: string;
-  /** Amount withdrawn and re-deposited */
-  amount_harvested: bigint;
+  /** Amount actually resupplied; not a yield amount */
+  amount_cycled: bigint;
 }
 
 /** Emitted by the contract. */
@@ -930,6 +930,8 @@ export const VaultErrorCode = {
   ProtocolAdapterNotConfigured: 81,
   /** The requested protocol is not on the owner-managed whitelist (#656). */
   ProtocolNotWhitelisted: 82,
+  /** The token is not configured for the requested vault asset operation. */
+  UnsupportedAsset: 83,
   /** General validation error */
   ValidationError: 100,
   /** Vault is paused, deposits and withdrawals disabled */
@@ -1331,11 +1333,11 @@ export class VaultClient {
    * AI agent rebalances funds between yield protocols
    * @param protocol
    * @param expected_apy
-  * @param min_out Slippage tolerance in basis points, applied per protocol leg.
+   * @param min_out
    * @fires RebalanceEvent
    */
-  async rebalance(signer: StellarSdk.Keypair, protocol: string, expected_apy: bigint, slippage_bps: bigint): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(protocol, { type: 'symbol' }), nativeToScVal(expected_apy, { type: 'i128' }), nativeToScVal(slippage_bps, { type: 'i128' })];
+  async rebalance(signer: StellarSdk.Keypair, protocol: string, expected_apy: bigint, min_out: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(protocol, { type: 'symbol' }), nativeToScVal(expected_apy, { type: 'i128' }), nativeToScVal(min_out, { type: 'i128' })];
     return this.invoke<void>('rebalance', args, signer);
   }
 
@@ -1419,19 +1421,19 @@ export class VaultClient {
    * Function rebalance_multi
    * @param blend_bps
    * @param dex_bps
-  * @param min_out Slippage tolerance in basis points, applied per venue leg.
+   * @param min_out
    */
-  async rebalance_multi(signer: StellarSdk.Keypair, blend_bps: number, dex_bps: number, slippage_bps: bigint): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(blend_bps, { type: 'u32' }), nativeToScVal(dex_bps, { type: 'u32' }), nativeToScVal(slippage_bps, { type: 'i128' })];
+  async rebalance_multi(signer: StellarSdk.Keypair, blend_bps: number, dex_bps: number, min_out: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(blend_bps, { type: 'u32' }), nativeToScVal(dex_bps, { type: 'u32' }), nativeToScVal(min_out, { type: 'i128' })];
     return this.invoke<void>('rebalance_multi', args, signer);
   }
 
   /**
    * Function harvest
-  * @param min_out Slippage tolerance in basis points, applied to withdrawal and supply legs.
+   * @param min_out
    */
-  async harvest(signer: StellarSdk.Keypair, slippage_bps: bigint): Promise<TxResult<void>> {
-    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(slippage_bps, { type: 'i128' })];
+  async harvest(signer: StellarSdk.Keypair, min_out: bigint): Promise<TxResult<void>> {
+    const args: StellarSdk.xdr.ScVal[] = [nativeToScVal(min_out, { type: 'i128' })];
     return this.invoke<void>('harvest', args, signer);
   }
 

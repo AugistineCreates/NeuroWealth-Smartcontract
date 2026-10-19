@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { getEarningsSummary, getPortfolioValueHistory, getRecentTransactions } from './database';
+import { server } from './stellar';
 
-const { fromMock } = vi.hoisted(() => ({ fromMock: vi.fn() }));
 
 vi.mock('./supabase', () => ({
   supabase: { from: fromMock },

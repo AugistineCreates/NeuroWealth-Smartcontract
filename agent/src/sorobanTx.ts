@@ -1,4 +1,4 @@
-import { Keypair, TransactionBuilder, Networks, Contract, rpc, Account, TimeoutInfinite, xdr } from '@stellar/stellar-sdk';
+import { Keypair, TransactionBuilder, Networks, Contract, rpc, Account, xdr } from '@stellar/stellar-sdk';
 import logger from './logger';
 import { server } from './eventListener';
 import { pool } from './db';
@@ -13,6 +13,12 @@ import {
 const networkPassphrase = process.env.SOROBAN_NETWORK_PASSPHRASE || Networks.TESTNET;
 const VAULT_CONTRACT_ID = process.env.VAULT_CONTRACT_ID;
 const secretKey = process.env.SOROBAN_SECRET_KEY;
+
+// Configurable transaction timeout in seconds (default: 60 seconds)
+const TX_TIMEOUT_SECONDS = parseInt(process.env.TX_TIMEOUT_SECONDS || '60', 10);
+
+// Configurable inclusion fee in stroops (default: 100 stroops)
+const TX_INCLUSION_FEE = parseInt(process.env.TX_INCLUSION_FEE || '100', 10);
 
 let agentKeypair: Keypair | null = null;
 if (secretKey) {
@@ -58,9 +64,9 @@ async function submitVaultTransaction(
         const account = await loadAccount(sourcePublicKey);
         const contract = new Contract(VAULT_CONTRACT_ID);
         const op = contract.call(method, ...args);
-        tx = new TransactionBuilder(account, { fee: '100', networkPassphrase })
+        tx = new TransactionBuilder(account, { fee: String(TX_INCLUSION_FEE), networkPassphrase })
           .addOperation(op)
-          .setTimeout(TimeoutInfinite)
+          .setTimeout(TX_TIMEOUT_SECONDS)
           .build();
       }
       return tx;
@@ -89,6 +95,9 @@ async function submitVaultTransaction(
           throw new Error('A successful simulation is required before signing');
         }
         if (!agentKeypair) throw new Error('SOROBAN_SECRET_KEY is required in live mode');
+        // Use resource fee from simulation and add inclusion fee
+        const resourceFee = simulation.minResourceFee || 0;
+        const totalFee = resourceFee + TX_INCLUSION_FEE;
         const signedTx = rpc.assembleTransaction(unsignedTx, simulation).build();
         signedTx.sign(agentKeypair);
         const txHash = signedTx.hash().toString('hex');

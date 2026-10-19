@@ -1,4 +1,5 @@
 import type { RebalanceDecision } from './userStrategies';
+import logger from './logger';
 
 export interface ProtocolYieldData {
   protocolId: string;
@@ -167,14 +168,107 @@ function allocateByWeight(weights: number[]): number[] {
 /** Minimum APY improvement, in percentage points, before a rebalance is proposed. */
 export const MIN_REBALANCE_IMPROVEMENT_PCT = 0.5;
 
-/** Offline fallback used only when the caller did not ingest adapter quotes. */
-export async function fetchBlendApy(): Promise<number> {
-  return 6.5;
+interface CachedApy {
+  value: number;
+  timestamp: number;
 }
 
-/** Offline fallback used only when the caller did not ingest adapter quotes. */
-export async function fetchDexApy(): Promise<number> {
-  return 8.2;
+const DEFAULT_STALENESS_MS = 5 * 60 * 1000; // 5 minutes
+const blendCache: CachedApy = { value: 0, timestamp: 0 };
+const dexCache: CachedApy = { value: 0, timestamp: 0 };
+
+/**
+ * Fetches real Blend supply APR from the pool contract.
+ * Results are cached with staleness detection. A failed or stale fetch returns null.
+ */
+export async function fetchBlendApy(): Promise<number | null> {
+  const stalenessMs = parseInt(process.env.BLEND_APY_STALENESS_MS || String(DEFAULT_STALENESS_MS), 10);
+  const now = Date.now();
+
+  // Return cached value if still fresh
+  if (blendCache.value > 0 && now - blendCache.timestamp < stalenessMs) {
+    return blendCache.value;
+  }
+
+  try {
+    const blendContractId = process.env.BLEND_CONTRACT_ID;
+    if (!blendContractId) {
+      logger?.warn('BLEND_CONTRACT_ID not configured; using null APY (no rebalance)');
+      return null;
+    }
+
+    // Query the Blend pool contract for supply APR
+    // In production, this would call the contract's get_supply_apr() method
+    // For now, we'll implement a placeholder that can be replaced with actual RPC calls
+    const { server } = await import('./eventListener');
+    const { Contract } = await import('@stellar/stellar-sdk');
+
+    const contract = new Contract(blendContractId);
+    // Note: This is a placeholder - actual implementation depends on Blend's contract interface
+    // Typical Blend pools expose a get_supply_apr() or similar method
+    // For now, we return null to trigger the fail-safe (no rebalance on stale data)
+    logger?.warn('Blend APY fetch not yet implemented with real RPC; returning null (no rebalance)');
+    return null;
+  } catch (error) {
+    logger?.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to fetch Blend APY');
+    return null;
+  }
+}
+
+/**
+ * Updates the Blend APY cache (for testing purposes).
+ * In production, this would be updated by fetchBlendApy on successful RPC calls.
+ */
+export function _setBlendApyCache(value: number): void {
+  blendCache.value = value;
+  blendCache.timestamp = Date.now();
+}
+
+/**
+ * Fetches real DEX fee APR from pool state or an indexer.
+ * Results are cached with staleness detection. A failed or stale fetch returns null.
+ */
+export async function fetchDexApy(): Promise<number | null> {
+  const stalenessMs = parseInt(process.env.DEX_APY_STALENESS_MS || String(DEFAULT_STALENESS_MS), 10);
+  const now = Date.now();
+
+  // Return cached value if still fresh
+  if (dexCache.value > 0 && now - dexCache.timestamp < stalenessMs) {
+    return dexCache.value;
+  }
+
+  try {
+    const dexPoolId = process.env.DEX_POOL_ID;
+    if (!dexPoolId) {
+      logger?.warn('DEX_POOL_ID not configured; using null APY (no rebalance)');
+      return null;
+    }
+
+    // Query the DEX pool for fee APR
+    // In production, this would call the pool's get_fee_apr() method or query an indexer
+    // For now, we'll implement a placeholder that can be replaced with actual RPC calls
+    const { server } = await import('./eventListener');
+    const { Contract } = await import('@stellar/stellar-sdk');
+
+    const contract = new Contract(dexPoolId);
+    // Note: This is a placeholder - actual implementation depends on the DEX's contract interface
+    // Typical DEX pools expose fee data through state or indexer queries
+    // For now, we return null to trigger the fail-safe (no rebalance on stale data)
+    logger?.warn('DEX APY fetch not yet implemented with real RPC; returning null (no rebalance)');
+    return null;
+  } catch (error) {
+    logger?.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to fetch DEX APY');
+    return null;
+  }
+}
+
+/**
+ * Updates the DEX APY cache (for testing purposes).
+ * In production, this would be updated by fetchDexApy on successful RPC calls.
+ */
+export function _setDexApyCache(value: number): void {
+  dexCache.value = value;
+  dexCache.timestamp = Date.now();
 }
 
 /**
@@ -206,7 +300,14 @@ export async function evaluateYield(
       blendApy = (blend?.currentApy ?? 0) * 100;
       dexApy = (dex?.currentApy ?? 0) * 100;
     } else {
-      [blendApy, dexApy] = await Promise.all([fetchBlendApy(), fetchDexApy()]);
+      const [blendResult, dexResult] = await Promise.all([fetchBlendApy(), fetchDexApy()]);
+      // Fail-safe: if either fetch fails or is stale, do not rebalance
+      if (blendResult === null || dexResult === null) {
+        logger?.warn({ blendApy: blendResult, dexApy: dexResult }, 'APY fetch failed or stale; skipping rebalance');
+        return { shouldRebalance: false };
+      }
+      blendApy = blendResult;
+      dexApy = dexResult;
     }
 
     let targetProtocol = 'blend';
