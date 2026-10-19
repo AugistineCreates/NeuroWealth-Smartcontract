@@ -243,7 +243,12 @@ fn test_invariant_blend_integration() {
     let deposit_amount = 10_000_000;
     mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
 
-    client.rebalance(&soroban_sdk::Symbol::new(&env, "blend"), &850_i128, &0_i128);
+    client.rebalance(
+        &agent,
+        &soroban_sdk::Symbol::new(&env, "blend"),
+        &850_i128,
+        &0_i128,
+    );
 
     // Simulate Blend yield (mint to blend pool)
     token_client.mint(&blend_pool, &1_000_000);
@@ -303,7 +308,12 @@ fn test_invariant_sequential_lifecycle() {
     assert_global_vault_invariants(&client, &users);
 
     // 6. Blend Update
-    client.rebalance(&soroban_sdk::Symbol::new(&env, "blend"), &850_i128, &0_i128);
+    client.rebalance(
+        &agent,
+        &soroban_sdk::Symbol::new(&env, "blend"),
+        &850_i128,
+        &0_i128,
+    );
     token_client.mint(&blend_pool, &2_000_000); // Blend Yield
 
     let vault_balance = token_client.balance(&contract_id);

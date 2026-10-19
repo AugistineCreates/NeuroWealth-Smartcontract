@@ -32,8 +32,22 @@ fn measure<F: FnOnce()>(env: &Env, f: F) -> (u64, u64) {
 fn check_baseline(name: &str, cpu: u64, mem: u64, base_cpu: u64, base_mem: u64) {
     let max_cpu = base_cpu + (base_cpu / 10);
     let max_mem = base_mem + (base_mem / 10);
-    assert!(cpu <= max_cpu, "{} CPU cost regressed! Expected <= {} (baseline {} + 10%) but got {}", name, max_cpu, base_cpu, cpu);
-    assert!(mem <= max_mem, "{} memory cost regressed! Expected <= {} (baseline {} + 10%) but got {}", name, max_mem, base_mem, mem);
+    assert!(
+        cpu <= max_cpu,
+        "{} CPU cost regressed! Expected <= {} (baseline {} + 10%) but got {}",
+        name,
+        max_cpu,
+        base_cpu,
+        cpu
+    );
+    assert!(
+        mem <= max_mem,
+        "{} memory cost regressed! Expected <= {} (baseline {} + 10%) but got {}",
+        name,
+        max_mem,
+        base_mem,
+        mem
+    );
 }
 
 // ============================================================================
@@ -87,8 +101,7 @@ fn test_budget_batch_deposit_uses_fewer_resources_than_two_deposits() {
 
     let separate_env = Env::default();
     separate_env.mock_all_auths();
-    let (separate_contract, _agent, _owner, separate_token) =
-        setup_vault_with_token(&separate_env);
+    let (separate_contract, _agent, _owner, separate_token) = setup_vault_with_token(&separate_env);
     let separate_client = NeuroWealthVaultClient::new(&separate_env, &separate_contract);
     let separate_user = Address::generate(&separate_env);
     let separate_token_client = TestTokenClient::new(&separate_env, &separate_token);
@@ -102,7 +115,10 @@ fn test_budget_batch_deposit_uses_fewer_resources_than_two_deposits() {
     std::println!(
         "[budget] batch_deposit (2 entries) cpu={batch_cpu} mem={batch_mem}; two deposits cpu={separate_cpu} mem={separate_mem}"
     );
-    assert!(batch_cpu < separate_cpu, "batch_deposit should use less CPU");
+    assert!(
+        batch_cpu < separate_cpu,
+        "batch_deposit should use less CPU"
+    );
 }
 
 // ============================================================================
@@ -139,7 +155,7 @@ fn test_budget_withdraw_with_blend_pull() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (contract_id, _agent, owner, usdc_token, blend_pool) =
+    let (contract_id, agent, owner, usdc_token, blend_pool) =
         setup_vault_with_token_and_blend(&env);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
 
@@ -150,7 +166,7 @@ fn test_budget_withdraw_with_blend_pull() {
     mint_and_deposit(&env, &client, &usdc_token, &user, amount);
 
     // Move funds into Blend so the withdraw path pulls from it
-    client.rebalance(&symbol_short!("blend"), &500_i128, &0_i128);
+    client.rebalance(&agent, &symbol_short!("blend"), &500_i128, &0_i128);
 
     let (cpu, mem) = measure(&env, || {
         client.withdraw(&user, &amount);
@@ -170,7 +186,7 @@ fn test_budget_rebalance_to_blend() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (contract_id, _agent, owner, usdc_token, blend_pool) =
+    let (contract_id, agent, owner, usdc_token, blend_pool) =
         setup_vault_with_token_and_blend(&env);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
 
@@ -180,7 +196,7 @@ fn test_budget_rebalance_to_blend() {
     mint_and_deposit(&env, &client, &usdc_token, &user, 10_000_000_i128);
 
     let (cpu, mem) = measure(&env, || {
-        client.rebalance(&symbol_short!("blend"), &850_i128, &0_i128);
+        client.rebalance(&agent, &symbol_short!("blend"), &850_i128, &0_i128);
     });
 
     std::println!("[budget] rebalance → blend  cpu={cpu}  mem={mem}");
@@ -193,7 +209,7 @@ fn test_budget_rebalance_to_none() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (contract_id, _agent, owner, usdc_token, blend_pool) =
+    let (contract_id, agent, owner, usdc_token, blend_pool) =
         setup_vault_with_token_and_blend(&env);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
 
@@ -201,10 +217,10 @@ fn test_budget_rebalance_to_none() {
 
     let user = Address::generate(&env);
     mint_and_deposit(&env, &client, &usdc_token, &user, 10_000_000_i128);
-    client.rebalance(&symbol_short!("blend"), &850_i128, &0_i128);
+    client.rebalance(&agent, &symbol_short!("blend"), &850_i128, &0_i128);
 
     let (cpu, mem) = measure(&env, || {
-        client.rebalance(&symbol_short!("none"), &0_i128, &0_i128);
+        client.rebalance(&agent, &symbol_short!("none"), &0_i128, &0_i128);
     });
 
     std::println!("[budget] rebalance → none  cpu={cpu}  mem={mem}");
@@ -221,7 +237,7 @@ fn test_budget_harvest() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (contract_id, _agent, owner, usdc_token, blend_pool) =
+    let (contract_id, agent, owner, usdc_token, blend_pool) =
         setup_vault_with_token_and_blend(&env);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
 
@@ -231,10 +247,10 @@ fn test_budget_harvest() {
     mint_and_deposit(&env, &client, &usdc_token, &user, 10_000_000_i128);
 
     // Move funds into Blend so harvest has a position to compound
-    client.rebalance(&symbol_short!("blend"), &850_i128, &0_i128);
+    client.rebalance(&agent, &symbol_short!("blend"), &850_i128, &0_i128);
 
     let (cpu, mem) = measure(&env, || {
-        client.harvest(&0_i128);
+        client.harvest(&agent, &0_i128);
     });
 
     std::println!("[budget] harvest  cpu={cpu}  mem={mem}");

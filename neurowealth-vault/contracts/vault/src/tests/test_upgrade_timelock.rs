@@ -300,10 +300,7 @@ fn test_cancel_upgrade_after_execute_upgrade_rejected() {
     env.as_contract(&contract_id, || {
         env.storage()
             .instance()
-            .remove(&crate::DataKey::PendingUpgradeHash);
-        env.storage()
-            .instance()
-            .remove(&crate::DataKey::UpgradeTimelockExpiry);
+            .remove(&crate::DataKey::PendingUpgrade);
     });
     assert!(
         client.get_pending_upgrade().is_none(),

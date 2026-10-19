@@ -1,5 +1,6 @@
 mod test_access_control;
 mod test_adversarial_agent_simulation;
+mod test_agent_compromise_scenarios;
 mod test_agent_timelock;
 mod test_approval_ttl;
 mod test_approval_ttl_schedule;
@@ -14,6 +15,7 @@ mod test_blend_integration;
 mod test_budget;
 mod test_checked_arithmetic;
 mod test_circuit_breaker;
+mod test_decrease_cap_proptest;
 // Pre-existing compile failures (stale APIs / missing traits); not harvest coverage.
 // mod test_concurrent_timelocks;
 mod test_deposit;
@@ -21,6 +23,7 @@ mod test_deposit;
 mod test_dex_devnet;
 mod test_dex_integration;
 mod test_emergency_harvest;
+mod test_emergency_withdrawal;
 mod test_event_payloads;
 mod test_event_schema;
 mod test_events;
@@ -28,16 +31,19 @@ mod test_exchange_rate;
 mod test_fuzz_deposit_withdraw;
 mod test_get_user_strategy_unset;
 mod test_harvest;
-mod test_inflation_attack;
+mod test_holding_period_coverage;
 mod test_index_pruning;
+mod test_inflation_attack;
 mod test_initialize;
 mod test_legacy_inline;
 mod test_limits;
 mod test_math_limits;
+mod test_migration;
+mod test_multi_asset;
 mod test_multi_protocol;
 mod test_multi_user_concurrent;
-mod test_multi_asset;
 mod test_no_privilege_escalation_proptest;
+mod test_ownership;
 mod test_pause;
 mod test_pool_config_idempotent;
 mod test_pool_rotation_with_deployed_funds;
@@ -47,6 +53,7 @@ mod test_rebalance_cooldown;
 mod test_rebalance_integration;
 // Pre-existing compile failures (MockTokenDataKey not #[contracttype], no std).
 // mod test_reentrancy_defense;
+mod test_migration_timelock;
 mod test_require_initialized;
 mod test_rotation_accounting_invariants;
 mod test_rounding_math;
@@ -55,11 +62,12 @@ mod test_security_agent_drain;
 mod test_share_conversion_proptest;
 mod test_share_locking;
 mod test_shares;
-mod test_standby_agent;
 mod test_stale_state_audit;
+mod test_standby_agent;
 mod test_storage_griefing_analysis;
 mod test_strategy_switch_low_liquidity;
 mod test_total_assets_cap;
+mod test_total_shares_invariant_proptest;
 mod test_transfer_delta_sanity;
 mod test_ttl;
 mod test_ttl_extension_failures;
@@ -69,17 +77,11 @@ mod test_update_total_assets_blend;
 mod test_update_total_assets_dex;
 mod test_upgrade_compatibility;
 mod test_upgrade_timelock;
-mod test_migration_timelock;
 mod test_user_strategy;
 mod test_users_with_shares;
 mod test_withdraw;
 mod test_yield;
 mod utils;
-
-
-mod test_liquidity_mining_rewards;
-mod test_performance_fee;
-
 
 mod test_batch_deposit;
 mod test_liquidity_mining_rewards;
@@ -89,14 +91,11 @@ mod test_performance_fee;
 // `comprehensive_tests`), missing aux modules (`../insurance.rs`),
 // ANSI-escape-corrupted attributes, and rejected API references
 // (`BatchDepositItem`, `BelowMinimumWithdrawal`). Not harvested for coverage.
-// mod test_batch_deposit;
+// (test_batch_deposit, test_user_apy, and test_withdrawal_queue were fixed
+// and re-registered above/below; only these two remain unfixed.)
 // mod test_insurance_fund;
 // mod test_min_withdraw;
 // mod test_min_withdrawal;
-// mod test_user_apy;
-// mod test_withdrawal_queue;
-mod test_user_apy;
-mod test_insurance_fund;
-mod test_withdrawal_queue;
 mod test_pause_queue_breaker_matrix_proptest;
-
+mod test_user_apy;
+mod test_withdrawal_queue;

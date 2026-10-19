@@ -23,5 +23,8 @@ fn test_batch_deposit_single_user_multiple_entries() {
     client.batch_deposit(&user, &entries);
 
     assert_eq!(client.get_shares(&user), first_amount + second_amount);
-    assert_eq!(token_client.balance(&contract_id), first_amount + second_amount);
+    assert_eq!(
+        token_client.balance(&contract_id),
+        first_amount + second_amount
+    );
 }
