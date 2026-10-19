@@ -97,6 +97,13 @@ test('keeps unresolved confirmation visible after closing and reopening the moda
   await depositButton.click();
   await expect(page.getByRole('status')).toContainText('local-test-tx-hash');
   await expect(page.getByRole('button', { name: /confirming transaction/i })).toBeDisabled();
+
+  // "Check status later" affordance dismisses the pending submission and unlocks the form
+  const checkStatusLaterBtn = page.getByRole('button', { name: /check status later/i });
+  await expect(checkStatusLaterBtn).toBeVisible();
+  await checkStatusLaterBtn.click();
+  await expect(page.getByRole('status')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Confirm Deposit' })).toBeVisible();
 });
 
 test('handles rejected signatures, wrong networks, failed simulations, and modal cancellation', async ({ page }) => {

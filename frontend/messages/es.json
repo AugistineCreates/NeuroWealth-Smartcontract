@@ -65,6 +65,7 @@
     "wrongNetwork": "Red incorrecta. Cambie Freighter a la red Stellar requerida e inténtelo de nuevo.",
     "walletDisconnected": "Billetera no conectada. Reconecte Freighter y otorgue acceso a esta aplicación, luego inténtelo de nuevo.",
     "submissionFailed": "La transacción falló. Inténtelo de nuevo.",
-    "transactionFailed": "La transacción falló. Inténtelo de nuevo."
+    "transactionFailed": "La transacción falló. Inténtelo de nuevo.",
+    "checkStatusLater": "Verificar estado más tarde"
   }
 }

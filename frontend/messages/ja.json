@@ -65,6 +65,7 @@
     "wrongNetwork": "ネットワークが間違っています。Freighterを必要なStellarネットワークに切り替えてから再試行してください。",
     "walletDisconnected": "ウォレットが接続されていません。Freighterを再接続してこのアプリにアクセスを許可してから、再試行してください。",
     "submissionFailed": "トランザクションが失敗しました。もう一度お試しください。",
-    "transactionFailed": "トランザクションが失敗しました。もう一度お試しください。"
+    "transactionFailed": "トランザクションが失敗しました。もう一度お試しください。",
+    "checkStatusLater": "後でステータスを確認"
   }
 }

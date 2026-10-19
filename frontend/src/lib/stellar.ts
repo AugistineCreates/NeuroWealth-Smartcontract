@@ -1,5 +1,6 @@
-import { Account, Address, Contract, rpc, scValToNative, TransactionBuilder, xdr } from '@stellar/stellar-sdk';
+import { Account, Address, Contract, nativeToScVal, rpc, scValToNative, TransactionBuilder, xdr } from '@stellar/stellar-sdk';
 import { getBrowserTestHarness } from './browserTestHarness';
+import { signWithFreighter, classifyWalletError } from './freighter';
 import {
   EMPTY_VAULT_STATE,
   deriveVaultState,
@@ -96,4 +97,59 @@ export async function fetchVaultState(userAddress?: string): Promise<VaultStateR
 
 export function shortenAddress(address: string, chars = 4): string {
   return shortenSharedAddress(address, chars);
+}
+
+export async function setUserStrategy(
+  userAddress: string,
+  strategy: 'Conservative' | 'Balanced' | 'Growth',
+): Promise<{ ok: boolean; hash?: string; error?: string }> {
+  const testHarness = getBrowserTestHarness();
+  const rawStrategy = strategy.toLowerCase();
+
+  try {
+    if (testHarness) {
+      return { ok: true, hash: 'test-strategy-hash' };
+    }
+
+    const account = await server.getAccount(userAddress);
+    const contract = new Contract(VAULT_CONTRACT_ID);
+    const tx = new TransactionBuilder(account, {
+      fee: '100',
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(
+        contract.call(
+          'set_user_strategy',
+          new Address(userAddress).toScVal(),
+          nativeToScVal(rawStrategy, { type: 'symbol' }),
+        ),
+      )
+      .setTimeout(300)
+      .build();
+
+    const prepared = await server.prepareTransaction(tx);
+    const signedXdr = await signWithFreighter(prepared.toXDR(), NETWORK_PASSPHRASE);
+    const sendResult = await server.sendTransaction(
+      TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE),
+    );
+
+    if (sendResult.status === 'ERROR' || sendResult.status === 'TRY_AGAIN_LATER') {
+      return { ok: false, error: 'Transaction failed to submit to the Stellar network.' };
+    }
+
+    const confirmation = await server.pollTransaction(sendResult.hash, { attempts: 10 });
+    if (confirmation.status === 'SUCCESS') {
+      return { ok: true, hash: sendResult.hash };
+    }
+    return { ok: false, error: 'Transaction execution failed on-chain.' };
+  } catch (err) {
+    const kind = classifyWalletError(err);
+    if (kind === 'user_rejected') {
+      return { ok: false, error: 'Transaction signature was rejected.' };
+    }
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Failed to update strategy.',
+    };
+  }
 }
