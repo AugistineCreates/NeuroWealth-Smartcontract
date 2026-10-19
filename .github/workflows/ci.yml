@@ -84,8 +84,8 @@ jobs:
           - name: "Vault UI Accessibility & Notifications"
             step: "vault-ui-test"
             working_directory: "packages/vault-ui"
-          - name: "Frontend Lint"
-            step: "frontend-lint"
+          - name: "Frontend Typecheck, Lint, Test & Build"
+            step: "frontend-check"
             working_directory: "frontend"
           - name: "Agent Typecheck, Lint & Tests"
             step: "agent-check"
@@ -180,9 +180,12 @@ jobs:
               npm ci --prefix ../..
               npm test --prefix ../.. --workspace=@neurowealth/vault-ui
               ;;
-            frontend-lint)
+            frontend-check|frontend-lint)
               npm ci
+              npm run typecheck
               npm run lint
+              npm test
+              npm run build
               ;;
             agent-check)
               npm ci

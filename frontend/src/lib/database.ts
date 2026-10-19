@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import { server } from './stellar';
 import { rpc, scValToNative } from '@stellar/stellar-sdk';
+import { getBrowserTestHarness } from './browserTestHarness';
 
 export interface EarningsSummary {
   today: number;

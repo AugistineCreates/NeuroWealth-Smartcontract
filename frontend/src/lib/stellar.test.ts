@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Keypair, nativeToScVal } from '@stellar/stellar-sdk';
+import { nativeToScVal } from '@stellar/stellar-sdk';
 
 /** stellar.ts reads NEXT_PUBLIC_VAULT_CONTRACT_ID at module load and throws if
  * unset, so the env must be stubbed and the module freshly imported per test. */
@@ -20,7 +20,7 @@ describe('stellar module env validation', () => {
 });
 
 describe('stellar lib fetchVaultState (#753)', () => {
-  const dummyUser = Keypair.random().publicKey();
+  const dummyUser = 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H';
 
   beforeEach(() => {
     vi.restoreAllMocks();

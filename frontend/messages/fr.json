@@ -65,6 +65,7 @@
     "wrongNetwork": "Réseau incorrect. Basculez Freighter vers le réseau Stellar requis, puis réessayez.",
     "walletDisconnected": "Portefeuille non connecté. Reconnectez Freighter et accordez l'accès à cette application, puis réessayez.",
     "submissionFailed": "La transaction a échoué. Veuillez réessayer.",
-    "transactionFailed": "La transaction a échoué. Veuillez réessayer."
+    "transactionFailed": "La transaction a échoué. Veuillez réessayer.",
+    "checkStatusLater": "Vérifier l'état plus tard"
   }
 }

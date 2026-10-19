@@ -9,10 +9,10 @@ import { PortfolioChart } from '@/components/PortfolioChart';
 import { TransactionHistory } from '@/components/TransactionHistory';
 import { ActionModal } from '@/components/ActionModal';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
-import { MessageSquare, Bot, ArrowRight, ShieldCheck, Zap, Layers, Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
+import { MessageSquare, Bot, ArrowRight, Zap, Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { connectFreighterWallet } from '@/lib/freighter';
-import { fetchVaultState, VaultState } from '@/lib/stellar';
+import { fetchVaultState, setUserStrategy, VaultState } from '@/lib/stellar';
 import {
   getEarningsSummary,
   getPortfolioValueHistory,
@@ -24,7 +24,6 @@ import {
 
 export default function DashboardPage() {
   const t = useTranslations('Index');
-  const tModal = useTranslations('ActionModal');
   const [publicKey, setPublicKey] = useState<string | null>(null);
   const [vaultState, setVaultState] = useState<VaultState>({
     balance: 0,
@@ -37,6 +36,8 @@ export default function DashboardPage() {
   const [transactions, setTransactions] = useState<TransactionRecord[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [isUpdatingStrategy, setIsUpdatingStrategy] = useState<boolean>(false);
+  const [strategyError, setStrategyError] = useState<string | null>(null);
 
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [modalType, setModalType] = useState<'deposit' | 'withdraw'>('deposit');
@@ -111,22 +112,45 @@ export default function DashboardPage() {
     setIsModalOpen(true);
   };
 
+  const handleSelectStrategy = async (newStrategy: 'Conservative' | 'Balanced' | 'Growth') => {
+    if (newStrategy === vaultState.strategy) return;
+    if (!publicKey) {
+      setStrategyError('Please connect your wallet to change strategy.');
+      return;
+    }
+
+    setIsUpdatingStrategy(true);
+    setStrategyError(null);
+    try {
+      const res = await setUserStrategy(publicKey, newStrategy);
+      if (res.ok) {
+        await loadData();
+      } else {
+        setStrategyError(res.error || 'Failed to update strategy on-chain.');
+      }
+    } catch (err: unknown) {
+      setStrategyError(err instanceof Error ? err.message : 'Failed to update strategy on-chain.');
+    } finally {
+      setIsUpdatingStrategy(false);
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-[#080b11] text-slate-100 flex flex-col justify-between">
+    <div className="min-h-screen bg-slate-50 dark:bg-[#080b11] text-slate-900 dark:text-slate-100 flex flex-col justify-between">
       <div>
         <Header publicKey={publicKey} onConnect={handleConnect} onDisconnect={handleDisconnect} />
 
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
           {!publicKey && (
-            <div className="glass-panel rounded-3xl p-8 relative overflow-hidden border border-emerald-500/20 bg-gradient-to-r from-emerald-950/30 via-slate-900/60 to-indigo-950/30 shadow-glow-emerald">
+            <div className="glass-panel rounded-3xl p-8 relative overflow-hidden border border-emerald-500/20 bg-gradient-to-r from-emerald-50 via-slate-100 to-indigo-50/50 dark:from-emerald-950/30 dark:via-slate-900/60 dark:to-indigo-950/30 shadow-glow-emerald">
               <div className="max-w-2xl relative z-10">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-semibold border border-emerald-500/20 mb-4">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-semibold border border-emerald-500/20 mb-4">
                   <Zap size={14} /> AI-Powered Autonomous Yield Engine
                 </div>
-                <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white mb-3">
+                <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white mb-3">
                   {t('title')}
                 </h1>
-                <p className="text-slate-300 text-sm sm:text-base leading-relaxed mb-6">
+                <p className="text-slate-600 dark:text-slate-300 text-sm sm:text-base leading-relaxed mb-6">
                   {t('description')}
                 </p>
                 <button
@@ -163,7 +187,7 @@ export default function DashboardPage() {
                   <SkeletonCard />
                 </>
               ) : error && publicKey ? (
-                <div role="status" className="md:col-span-3 glass-panel rounded-2xl p-6 text-sm text-slate-300">
+                <div role="status" className="md:col-span-3 glass-panel rounded-2xl p-6 text-sm text-slate-700 dark:text-slate-300">
                   {t('vaultBalancesError')}
                 </div>
               ) : (
@@ -180,7 +204,9 @@ export default function DashboardPage() {
                   <StrategyBadge
                     strategy={vaultState.strategy}
                     apy={vaultState.apy}
-                    onSelectStrategy={(newSt) => setVaultState((prev) => ({ ...prev, strategy: newSt }))}
+                    onSelectStrategy={handleSelectStrategy}
+                    isUpdating={isUpdatingStrategy}
+                    error={strategyError}
                   />
                 </>
               )}
@@ -219,27 +245,27 @@ export default function DashboardPage() {
             <div id="whatsapp" className="glass-panel-interactive rounded-2xl p-6 relative overflow-hidden flex flex-col justify-between border border-emerald-500/20">
               <div>
                 <div className="flex items-center justify-between mb-4">
-                  <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                    <MessageSquare size={14} className="text-emerald-400" /> {t('whatsappIntegration')}
+                  <span className="text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <MessageSquare size={14} className="text-emerald-500 dark:text-emerald-400" /> {t('whatsappIntegration')}
                   </span>
-                  <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                  <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
                     {t('liveBot')}
                   </span>
                 </div>
-                <h3 className="text-lg font-bold text-white mb-2">
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">
                   {t('interactViaWhatsApp')}
                 </h3>
-                <p className="text-xs text-slate-300 leading-relaxed mb-4">
+                <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed mb-4">
                   {t('whatsappDescription')}
                 </p>
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 font-mono text-xs text-emerald-400 space-y-1 mb-4">
+                <div className="bg-slate-100 dark:bg-slate-950 p-3 rounded-xl border border-slate-200 dark:border-slate-800 font-mono text-xs text-emerald-600 dark:text-emerald-400 space-y-1 mb-4">
                   <div>User: deposit 100 USDC</div>
-                  <div className="text-slate-300">Agent: Got it! Deposited 100 USDC into Balanced strategy. ✅</div>
+                  <div className="text-slate-700 dark:text-slate-300">Agent: Got it! Deposited 100 USDC into Balanced strategy. ✅</div>
                 </div>
               </div>
-              <div className="pt-4 border-t border-slate-800">
-                <span className="text-xs text-slate-400 block mb-2">{t('webhookUrl')}</span>
-                <code className="text-[11px] bg-slate-900 px-2 py-1 rounded border border-slate-800 text-slate-300 block truncate">
+              <div className="pt-4 border-t border-slate-200 dark:border-slate-800">
+                <span className="text-xs text-slate-600 dark:text-slate-400 block mb-2">{t('webhookUrl')}</span>
+                <code className="text-[11px] bg-slate-200 dark:bg-slate-900 px-2 py-1 rounded border border-slate-300 dark:border-slate-800 text-slate-700 dark:text-slate-300 block truncate">
                   /api/whatsapp/webhook
                 </code>
               </div>
@@ -257,17 +283,17 @@ export default function DashboardPage() {
         exchangeRate={vaultState.exchangeRate}
       />
 
-      <footer className="border-t border-slate-800/80 bg-[#06080e] py-6 mt-12 text-center text-xs text-slate-400">
+      <footer className="border-t border-slate-200 dark:border-slate-800/80 bg-white dark:bg-[#06080e] py-6 mt-12 text-center text-xs text-slate-600 dark:text-slate-400">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
-            <Bot size={16} className="text-emerald-400" />
-            <span className="font-semibold text-slate-300">NeuroWealth AI Vault</span>
+            <Bot size={16} className="text-emerald-500 dark:text-emerald-400" />
+            <span className="font-semibold text-slate-700 dark:text-slate-300">NeuroWealth AI Vault</span>
             <span>— {t('footerText')}</span>
           </div>
           <div className="flex items-center gap-6">
-            <a href="https://stellar.org" target="_blank" rel="noreferrer" className="hover:text-emerald-400 transition-colors">{t('stellarNetwork')}</a>
-            <a href="https://soroban.stellar.org" target="_blank" rel="noreferrer" className="hover:text-emerald-400 transition-colors">{t('sorobanSdk')}</a>
-            <a href="https://freighter.app" target="_blank" rel="noreferrer" className="hover:text-emerald-400 transition-colors">{t('freighterWallet')}</a>
+            <a href="https://stellar.org" target="_blank" rel="noreferrer" className="hover:text-emerald-500 dark:hover:text-emerald-400 transition-colors">{t('stellarNetwork')}</a>
+            <a href="https://soroban.stellar.org" target="_blank" rel="noreferrer" className="hover:text-emerald-500 dark:hover:text-emerald-400 transition-colors">{t('sorobanSdk')}</a>
+            <a href="https://freighter.app" target="_blank" rel="noreferrer" className="hover:text-emerald-500 dark:hover:text-emerald-400 transition-colors">{t('freighterWallet')}</a>
           </div>
         </div>
       </footer>
@@ -278,9 +304,9 @@ export default function DashboardPage() {
 function SkeletonCard() {
   return (
     <div className="glass-panel rounded-2xl p-6 animate-pulse space-y-4">
-      <div className="h-4 bg-slate-700/50 rounded w-1/3" />
-      <div className="h-8 bg-slate-700/50 rounded w-1/2" />
-      <div className="h-3 bg-slate-700/50 rounded w-2/3" />
+      <div className="h-4 bg-slate-200 dark:bg-slate-700/50 rounded w-1/3" />
+      <div className="h-8 bg-slate-200 dark:bg-slate-700/50 rounded w-1/2" />
+      <div className="h-3 bg-slate-200 dark:bg-slate-700/50 rounded w-2/3" />
     </div>
   );
 }
