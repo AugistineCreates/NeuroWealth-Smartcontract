@@ -7,7 +7,7 @@
 
 use super::utils::*;
 use crate::{
-    APPROVAL_RENEWAL_LEAD_LEDGERS, ProtocolApprovalScheduledEvent, TOPIC_APPROVAL_TTL_SCHEDULED,
+    ProtocolApprovalScheduledEvent, APPROVAL_RENEWAL_LEAD_LEDGERS, TOPIC_APPROVAL_TTL_SCHEDULED,
 };
 use soroban_sdk::{
     symbol_short,
@@ -15,17 +15,18 @@ use soroban_sdk::{
     Env, TryFromVal,
 };
 
-/// Reads the single `ttl_sch` event emitted so far, failing if there is not
-/// exactly one.
+/// Reads the most recently emitted `ttl_sch` event, failing if none exists.
+///
+/// `env.events().all()` accumulates every event emitted so far in the test,
+/// so callers that invoke `set_approval_ttl` more than once (e.g. in a loop
+/// over several TTL values) will see more than one `ttl_sch` event by the
+/// time this runs. The most recent one reflects the state asserted against
+/// immediately after each call, which is what every caller here wants.
 fn only_schedule_event(env: &Env) -> ProtocolApprovalScheduledEvent {
     let events = find_events_by_topic(env.events().all(), env, TOPIC_APPROVAL_TTL_SCHEDULED);
-    assert_eq!(
-        events.len(),
-        1,
-        "expected exactly one approval-schedule event, got {}",
-        events.len()
-    );
-    let (_, _, data) = &events[0];
+    let (_, _, data) = events
+        .last()
+        .expect("expected at least one approval-schedule event");
     ProtocolApprovalScheduledEvent::try_from_val(env, data)
         .expect("should be a valid ProtocolApprovalScheduledEvent")
 }
@@ -159,7 +160,10 @@ fn test_blend_approval_ttl_emits_schedule_scoped_to_blend() {
     assert_eq!(event.protocol, symbol_short!("blend"));
     assert_eq!(event.approval_ttl, ttl);
     assert_eq!(event.expiry_ledger, env.ledger().sequence() + ttl);
-    assert_eq!(event.renewal_deadline_ledger, event.expiry_ledger - event.lead_time);
+    assert_eq!(
+        event.renewal_deadline_ledger,
+        event.expiry_ledger - event.lead_time
+    );
 }
 
 /// Publishing the schedule must not extend or renew anything: no pool

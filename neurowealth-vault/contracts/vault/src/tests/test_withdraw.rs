@@ -1,9 +1,9 @@
 //! Tests for withdrawal functionality
 
 use super::utils::*;
-use crate::{DataKey, WithdrawEvent, TOPIC_WITHDRAW};
+use crate::{DataKey, VaultError, WithdrawEvent, TOPIC_WITHDRAW};
 use proptest::prelude::*;
-use soroban_sdk::{testutils::Address as _, Address, Env, TryFromVal};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address, Env, TryFromVal};
 
 /// Reads the raw `Shares(user)` value persisted in storage.
 fn stored_shares(env: &Env, contract_id: &Address, user: &Address) -> Option<i128> {
@@ -346,7 +346,6 @@ fn test_withdraw_emits_event() {
     );
 }
 
-
 #[test]
 fn test_withdraw_all_enforces_min_holding_period() {
     let env = Env::default();
@@ -366,17 +365,24 @@ fn test_withdraw_all_enforces_min_holding_period() {
 
     // Attempting withdraw_all in the same ledger must fail with HoldingPeriodNotElapsed (error 75)
     let res = client.try_withdraw_all(&user);
-    assert!(res.is_err(), "withdraw_all must fail when min holding period has not elapsed");
+    assert!(
+        res.is_err(),
+        "withdraw_all must fail when min holding period has not elapsed"
+    );
     assert_eq!(
         res.err().unwrap().unwrap(),
         VaultError::HoldingPeriodNotElapsed.into()
     );
 
     // Advance ledger sequence by 10 ledgers
-    env.ledger().set_sequence_number(env.ledger().sequence() + min_holding);
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + min_holding);
 
     // Now withdraw_all must succeed
     let withdrawn = client.withdraw_all(&user);
-    assert!(withdrawn > 0, "withdraw_all should succeed after holding period has elapsed");
+    assert!(
+        withdrawn > 0,
+        "withdraw_all should succeed after holding period has elapsed"
+    );
     assert_eq!(client.get_shares(&user), 0, "All shares should be burned");
 }

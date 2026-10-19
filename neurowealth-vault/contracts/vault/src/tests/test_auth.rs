@@ -150,12 +150,12 @@ fn test_agent_rebalance_with_scoped_auth() {
         invoke: &MockAuthInvoke {
             contract: &contract_id,
             fn_name: "rebalance",
-            args: (symbol_short!("none"), 500_i128, 0_i128).into_val(&env),
+            args: (agent.clone(), symbol_short!("none"), 500_i128, 0_i128).into_val(&env),
             sub_invokes: &[],
         },
     }]);
 
-    client.rebalance(&symbol_short!("none"), &500_i128, &0_i128);
+    client.rebalance(&agent, &symbol_short!("none"), &500_i128, &0_i128);
     assert_eq!(client.get_current_protocol(), symbol_short!("none"));
 }
 
@@ -168,7 +168,7 @@ fn test_rebalance_requires_agent_auth() {
 
     env.mock_auths(&[]);
 
-    let result = client.try_rebalance(&symbol_short!("none"), &500_i128, &0_i128);
+    let result = client.try_rebalance(&_agent, &symbol_short!("none"), &500_i128, &0_i128);
     assert!(
         result.is_err(),
         "rebalance must fail without the agent's authorization"

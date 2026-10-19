@@ -228,7 +228,7 @@ fn test_security_inflation_with_blend_deployment_bounded() {
     mint_and_deposit(&env, &client, &usdc_token, &user, deposit);
 
     blend_client.set_max_supply_limit(&20_000_000_i128);
-    client.rebalance(&symbol_short!("blend"), &700_i128, &0_i128);
+    client.rebalance(&agent, &symbol_short!("blend"), &700_i128, &0_i128);
 
     // All funds now in Blend: idle=0, deployed=20
     assert_eq!(token_client.balance(&contract_id), 0);

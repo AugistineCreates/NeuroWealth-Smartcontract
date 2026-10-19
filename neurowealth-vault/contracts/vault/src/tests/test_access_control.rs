@@ -8,7 +8,18 @@
 
 use super::utils::*;
 use crate::{AgentUpdatedEvent, TOPIC_AGENT_UPDATED};
-use soroban_sdk::{symbol_short, testutils::Address as _, Address, BytesN, Env, TryFromVal};
+use soroban_sdk::{
+    symbol_short, testutils::Address as _, testutils::Ledger as _, Address, BytesN, Env, TryFromVal,
+};
+
+/// Keeps storage entries alive across the large ledger jumps these tests make.
+fn keep_storage_alive(env: &Env) {
+    env.ledger().with_mut(|li| {
+        li.min_persistent_entry_ttl = 1_000_000;
+        li.min_temp_entry_ttl = 1_000_000;
+        li.max_entry_ttl = 2_000_000;
+    });
+}
 
 // ============================================================================
 // OWNER-ONLY HAPPY PATHS
@@ -100,12 +111,30 @@ fn test_owner_can_set_deposit_limits() {
 fn test_owner_can_update_agent() {
     let env = Env::default();
     env.mock_all_auths();
+    keep_storage_alive(&env);
 
     let (contract_id, old_agent, _owner, _usdc_token) = setup_vault_with_token(&env);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
 
+    // update_agent only PROPOSES the change (step 1 of 2, issue #317); the
+    // active agent is unchanged until confirm_agent_update() is called after
+    // the timelock elapses.
     let new_agent = Address::generate(&env);
     client.update_agent(&new_agent);
+
+    assert_eq!(
+        client.get_agent(),
+        old_agent,
+        "agent must not change until confirmed"
+    );
+    let (pending_addr, expiry) = client
+        .get_pending_agent_update()
+        .expect("pending agent update should be recorded");
+    assert_eq!(pending_addr, new_agent);
+
+    // Advance past the timelock and confirm.
+    env.ledger().set_sequence_number(expiry);
+    client.confirm_agent_update();
 
     assert_eq!(client.get_agent(), new_agent);
     assert_ne!(client.get_agent(), old_agent);
@@ -115,12 +144,20 @@ fn test_owner_can_update_agent() {
 fn test_update_agent_emits_event() {
     let env = Env::default();
     env.mock_all_auths();
+    keep_storage_alive(&env);
 
     let (contract_id, old_agent, _owner, _usdc_token) = setup_vault_with_token(&env);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
 
+    // update_agent only proposes (step 1 of 2, issue #317); TOPIC_AGENT_UPDATED /
+    // AgentUpdatedEvent is only emitted (for backward compatibility) by
+    // confirm_agent_update() once the timelock has elapsed.
     let new_agent = Address::generate(&env);
     client.update_agent(&new_agent);
+
+    let (_, expiry) = client.get_pending_agent_update().unwrap();
+    env.ledger().set_sequence_number(expiry);
+    client.confirm_agent_update();
 
     let agent_events = find_events_by_topic(env.events().all(), &env, TOPIC_AGENT_UPDATED);
     assert_eq!(
@@ -312,7 +349,7 @@ fn test_non_owner_cannot_set_approval_ttl() {
 }
 
 #[test]
-#[should_panic(expected = "vault: only owner can set blend approval ttl")]
+#[should_panic(expected = "Error(Contract, #34)")]
 fn test_non_owner_cannot_set_blend_approval_ttl() {
     let env = Env::default();
     env.mock_all_auths();
@@ -421,7 +458,7 @@ fn test_agent_can_rebalance() {
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
 
     // "none" protocol is always safe — no external pool required
-    client.rebalance(&symbol_short!("none"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("none"), &500_i128, &0_i128);
 
     assert_eq!(
         client.get_current_protocol(),
@@ -801,7 +838,7 @@ fn test_rebalance_blocked_while_paused() {
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
 
     client.pause(&owner);
-    client.rebalance(&symbol_short!("none"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("none"), &500_i128, &0_i128);
 }
 
 // ============================================================================

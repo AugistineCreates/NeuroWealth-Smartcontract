@@ -80,7 +80,7 @@ fn test_after_rebalance_to_blend_deployed_grows_idle_shrinks() {
     assert_eq!(client.get_deployed_assets(), 0_i128);
 
     // Rebalance: all vault USDC is transferred to MockBlendPool.
-    client.rebalance(&symbol_short!("blend"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &500_i128, &0_i128);
 
     // After rebalance the vault should hold no USDC locally.
     assert_eq!(
@@ -125,7 +125,7 @@ fn test_after_rebalance_to_dex_deployed_grows_idle_shrinks() {
     assert_eq!(client.get_idle_balance(), deposit_amount);
     assert_eq!(client.get_deployed_assets(), 0_i128);
 
-    client.rebalance(&symbol_short!("dex"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("dex"), &500_i128, &0_i128);
 
     assert_eq!(
         client.get_idle_balance(),
@@ -178,7 +178,7 @@ fn test_get_asset_breakdown_matches_individual_getters() {
     );
 
     // Rebalance to Blend.
-    client.rebalance(&symbol_short!("blend"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &500_i128, &0_i128);
 
     // Check breakdown after rebalance.
     let (idle_after, deployed_after) = client.get_asset_breakdown();
@@ -230,7 +230,7 @@ fn test_get_asset_breakdown_matches_individual_getters_for_dex() {
         "breakdown.deployed should match get_deployed_assets before rebalance"
     );
 
-    client.rebalance(&symbol_short!("dex"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("dex"), &500_i128, &0_i128);
 
     let (idle_after, deployed_after) = client.get_asset_breakdown();
     assert_eq!(
@@ -300,7 +300,7 @@ fn test_idle_plus_deployed_equals_total_across_rebalance_cycle() {
     assert_eq!(deployed, 0, "nothing should be deployed after deposit");
 
     // STEP 2: Rebalance to Blend
-    client.rebalance(&symbol_short!("blend"), &700_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &700_i128, &0_i128);
     let idle = client.get_idle_balance();
     let deployed = client.get_deployed_assets();
     let total = client.get_total_assets();
@@ -338,7 +338,7 @@ fn test_idle_plus_deployed_equals_total_across_rebalance_cycle() {
     );
 
     // STEP 4: Rebalance to DEX (different protocol)
-    client.rebalance(&symbol_short!("dex"), &800_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("dex"), &800_i128, &0_i128);
     let idle = client.get_idle_balance();
     let deployed = client.get_deployed_assets();
     let total = client.get_total_assets();
