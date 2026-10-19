@@ -149,7 +149,7 @@ use core::cmp::min;
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
-    vec, Address, BytesN, Env, IntoVal, String, Symbol, Val, Vec,
+    vec, Address, BytesN, Env, IntoVal, Map, String, Symbol, Val, Vec,
 };
 
 // ============================================================================
@@ -316,22 +316,35 @@ pub enum VaultError {
     /// The call requires single-protocol mode, but multi-protocol mode is active.
     MultiProtocolEnabledError = 79,
 
+    /// A batch contains more entries than the configured maximum.
+    BatchSizeExceeded = 80,
+    /// No adapter contract is configured for the requested protocol (#656).
+    ProtocolAdapterNotConfigured = 81,
+    /// The requested protocol is not on the owner-managed whitelist (#656).
+    ProtocolNotWhitelisted = 82,
+    /// The token is not configured for the requested vault asset operation.
+    UnsupportedAsset = 83,
     /// The configured call rate for an operation has been exhausted.
     RateLimitExceeded = 84,
     /// The owner supplied an unsupported rate-limit category.
     InvalidRateLimitCategory = 85,
     /// A rate-limit window must be non-zero when a limit is enabled.
     InvalidRateLimitConfig = 86,
-    /// A batch contains more entries than the configured maximum.
-    BatchSizeExceeded = 87,
-    /// No adapter contract is configured for the requested protocol (#656).
-    ProtocolAdapterNotConfigured = 88,
-    /// The requested protocol is not on the owner-managed whitelist (#656).
-    ProtocolNotWhitelisted = 89,
-    /// The token is not configured for the requested vault asset operation.
-    UnsupportedAsset = 90,
+    /// The withdrawal request has already been fulfilled.
+    WithdrawalRequestAlreadyFulfilled = 87,
+    /// The withdrawal request has already been cancelled.
+    WithdrawalRequestAlreadyCancelled = 88,
+    /// The caller is not the address that created this withdrawal request.
+    NotRequestOwner = 89,
     /// The caller is neither the primary agent nor the standby agent (#653).
-    UnauthorizedAgentError = 91,
+    UnauthorizedAgentError = 90,
+    /// `pause()` was called while the vault is already paused (#988).
+    AlreadyPaused = 91,
+    /// `update_standby_agent` was called with the primary agent's own
+    /// address. Neither `NotInitialized` nor `InvalidStrategy` (the two
+    /// variants this call site used interchangeably before) describes this
+    /// case; both are unrelated error conditions reused by mistake.
+    StandbyMatchesPrimaryAgent = 92,
 }
 
 impl VaultError {
@@ -562,13 +575,43 @@ pub enum DataKey {
     RateLimitConfig(Symbol),
     /// Global fixed-window rate-limit usage for a category.
     RateLimitGlobalState(Symbol),
+}
+
+/// Storage keys added once [`DataKey`] reached `#[contracttype]`'s 50-variant
+/// union-case limit (a hard panic in soroban-sdk 21's enum macro, not a
+/// warning — confirmed by bisecting the variant count in isolation).
+///
+/// This is a second, independent enum rather than a reshuffling of
+/// [`DataKey`]: each enum's case numbers are assigned purely by declaration
+/// position within that enum (`soroban-sdk-macros`' `derive_enum` enumerates
+/// its own `variants` from 0), so adding `DataKeyExt` leaves every existing
+/// `DataKey` variant's on-chain discriminant exactly where it was. Newer keys
+/// belong here; nothing already in `DataKey` should move.
+#[contracttype]
+pub enum DataKeyExt {
     /// Per-user fixed-window rate-limit usage for a category.
     RateLimitUserState(Address, Symbol),
     /// Maximum entries accepted by `batch_deposit`; `0` means unlimited.
     MaxBatchSize,
     /// First-deposit snapshot for realized-APY computation (key: user Address) (#462).
-    /// Appended to preserve the serialized discriminants of existing keys.
     DepositSnapshot(Address),
+    /// Adapter contract address for a protocol (key: protocol symbol) (#656).
+    ///
+    /// Set by the owner via `set_protocol_adapter`. When present, the protocol
+    /// becomes eligible for `supply`/`withdraw` through the uniform adapter
+    /// interface.
+    ProtocolAdapter(Symbol),
+    /// Whitelist flag for a protocol (key: protocol symbol) (#656).
+    ///
+    /// Set by the owner via `set_protocol_whitelisted`. Both conditions —
+    /// whitelisted AND adapter configured — must hold before `rebalance` will
+    /// deploy funds to a protocol.
+    ProtocolWhitelist(Symbol),
+    /// Append-only index of whitelisted protocol symbols for enumeration (#656).
+    ///
+    /// Stored as `Vec<Symbol>` in instance storage, updated whenever the
+    /// whitelist changes. Read by `get_protocol_whitelist`.
+    ProtocolWhitelistIndex,
 
     // ============================================================================
     // Agent key rotation — hot-standby pattern (#653)
@@ -576,19 +619,14 @@ pub enum DataKey {
     /// Standby AI agent key that can also call rebalance, harvest, and
     /// update_total_assets alongside the primary agent (#653).
     ///
-    /// Hot-standby agent state, as `(standby_agent, timelock_expiry_ledger)`
-    /// (#653).
-    ///
-    /// When `standby_agent` is present, `require_is_agent` accepts either the
-    /// primary `Agent` or the standby. The owner may update it independently
-    /// via `update_standby_agent` (which also resets the timelock) and
-    /// perform an instant switchover via `switch_to_standby_agent` once the
-    /// timelock has elapsed. Combined into a single tuple-valued key
-    /// (formerly the separate `StandbyAgent` / `StandbyAgentTimelockExpiry`
-    /// keys — the latter was referenced by `update_standby_agent` and
-    /// `switch_to_standby_agent` but had never been declared as its own
-    /// variant) to stay within Soroban's `#[contracttype]` variant cap.
-    StandbyAgentState,
+    /// When present, `require_is_agent` accepts either the primary `Agent` or
+    /// the `StandbyAgent`. The owner may update it independently via
+    /// `update_standby_agent` and perform an instant switchover via
+    /// `switch_to_standby_agent`. Both functions are deliberately
+    /// timelock-free (hot-standby rotation is meant to be instant); only the
+    /// two-step `update_agent` / `confirm_agent_update` primary-agent flow is
+    /// time-delayed.
+    StandbyAgent,
 
     // ============================================================================
     // Withdrawal Queue (#757)
@@ -603,16 +641,6 @@ pub enum DataKey {
     QueueOrder,
     /// Withdrawal queue storage schema version used by lazy compaction.
     WithdrawalQueueStorageVersion,
-}
-
-/// Storage keys added after `DataKey` reached Soroban's `#[contracttype]`
-/// enum-size limit (adding one more variant to `DataKey` panics the macro
-/// with `LengthExceedsMax`). A separate `#[contracttype]` enum is a
-/// distinct, independently-encodable key type, so there is no collision
-/// risk with `DataKey` — this mirrors the existing `MultiAssetKey` enum,
-/// which solves the same per-feature key-namespacing need.
-#[contracttype]
-pub enum DataKeyExt {
     /// Sum of `amount` across a user's own pending (non-fulfilled,
     /// non-cancelled) withdrawal requests, in underlying-asset units
     /// (#990). `queue_withdrawal` checks the user's shares against this
@@ -1774,6 +1802,25 @@ pub struct SharesMigratedEvent {
     pub assets_transferred: i128,
 }
 
+/// Emitted by the receiving vault when it credits a migrated position via
+/// `receive_migration` (#987). The mirror-image event to
+/// `SharesMigratedEvent`, which the sending vault publishes.
+///
+/// # Topics
+/// - `SymbolShort("mig_recv")` (`TOPIC_MIGRATION_RECEIVED`) - Event identifier
+/// - `Address` - the migrated user, published as an indexed topic
+#[contracttype]
+pub struct MigrationReceivedEvent {
+    /// The user whose position was credited
+    pub user: Address,
+    /// The vault that sent the migrated funds
+    pub source_vault: Address,
+    /// Amount of assets (USDC) credited
+    pub amount: i128,
+    /// Shares minted for the credited amount
+    pub shares_minted: i128,
+}
+
 /// Emitted when a scheduled migration target change is executed (#637, #969).
 ///
 /// # Topics
@@ -2098,6 +2145,82 @@ struct BlendRequest {
     amount: i128,
 }
 
+/// Mirrors Blend v2's `Positions` (`pool/src/pool/user.rs`), field-for-field,
+/// so it decodes structurally from `get_positions`'s cross-contract return
+/// without a dependency on the `blend-contracts-v2` crate (#986).
+///
+/// Supply made via a plain `Supply` request (what this adapter uses, request
+/// type 0) lands in `supply`, not `collateral` — confirmed against Blend's
+/// `build_actions_from_request`, which routes `RequestType::Supply` and
+/// `RequestType::Withdraw` through the uncollateralized `supply` map.
+/// `collateral` is only written by `SupplyCollateral`/`WithdrawCollateral`
+/// (request types 2/3), which this adapter never sends.
+#[derive(Clone)]
+#[contracttype]
+struct BlendPositions {
+    liabilities: Map<u32, i128>,
+    collateral: Map<u32, i128>,
+    supply: Map<u32, i128>,
+}
+
+/// Mirrors Blend v2's `ReserveConfig` (`pool/src/storage.rs`) completely.
+/// Soroban's `#[contracttype]` struct decoding checks the incoming map's
+/// field count against this struct's own field count before decoding by
+/// name, so a partial mirror missing fields Blend's real struct has would
+/// fail to decode at all, not just ignore what's missing. `index` (this
+/// reserve's position in `get_reserve_list()`, and the key into
+/// `BlendPositions`' maps) is the only field this adapter actually reads.
+#[derive(Clone)]
+#[contracttype]
+struct BlendReserveConfig {
+    index: u32,
+    decimals: u32,
+    c_factor: u32,
+    l_factor: u32,
+    util: u32,
+    max_util: u32,
+    r_base: u32,
+    r_one: u32,
+    r_two: u32,
+    r_three: u32,
+    reactivity: u32,
+    supply_cap: i128,
+    enabled: bool,
+}
+
+/// Mirrors Blend v2's `ReserveData` (`pool/src/storage.rs`) completely, for
+/// the same field-count reason as `BlendReserveConfig`. `b_rate` (the
+/// bToken-to-underlying conversion rate, scaled by `BLEND_RATE_SCALAR`,
+/// confirmed against `Reserve::to_asset_from_b_token` in
+/// `pool/src/pool/reserve.rs`) is the only field this adapter reads.
+#[derive(Clone)]
+#[contracttype]
+struct BlendReserveData {
+    d_rate: i128,
+    b_rate: i128,
+    ir_mod: i128,
+    b_supply: i128,
+    d_supply: i128,
+    backstop_credit: i128,
+    last_time: u64,
+}
+
+/// Mirrors Blend v2's `Reserve` (`pool/src/pool/reserve.rs`) completely, for
+/// the same field-count reason as `BlendReserveConfig`.
+#[derive(Clone)]
+#[contracttype]
+struct BlendReserve {
+    asset: Address,
+    config: BlendReserveConfig,
+    data: BlendReserveData,
+    scalar: i128,
+}
+
+/// Scale of Blend's `b_rate`/`d_rate` (`SCALAR_12` in
+/// `blend-contracts-v2`'s `pool/src/constants.rs`): `underlying =
+/// b_tokens * b_rate / BLEND_RATE_SCALAR`.
+const BLEND_RATE_SCALAR: i128 = 1_000_000_000_000;
+
 const BLEND_REQUEST_TYPE_SUPPLY: u32 = 0;
 const BLEND_REQUEST_TYPE_WITHDRAW: u32 = 1;
 const DEFAULT_USER_DEPOSIT_CAP: i128 = 10_000_000_000_i128;
@@ -2210,21 +2333,19 @@ use topics::{
     TOPIC_AGENT_UPDATE_CONFIRMED, TOPIC_AGENT_UPDATE_PROPOSED, TOPIC_APPROVAL_TTL_SCHEDULED,
     TOPIC_APPROVAL_TTL_UPDATED, TOPIC_ASSETS_UPDATED, TOPIC_ASSET_DEPOSIT, TOPIC_ASSET_WITHDRAW,
     TOPIC_BATCH_SIZE_LIMIT_UPDATED, TOPIC_BLEND_POOL_CONFIGURED, TOPIC_BLEND_SUPPLY,
-    TOPIC_BLEND_WITHDRAW, TOPIC_CAPS_UPDATED, TOPIC_CIRCUIT_BREAKER_RESET, TOPIC_DEPOSIT,
-    TOPIC_DEPOSIT_LIMITS_UPDATED, TOPIC_DEX_POOL_CONFIGURED, TOPIC_DEX_SUPPLY, TOPIC_DEX_WITHDRAW,
-    TOPIC_EMERGENCY_HARVEST, TOPIC_EMERGENCY_PAUSED, TOPIC_EMERGENCY_WITHDRAWAL, TOPIC_HARVEST,
-    TOPIC_INIT, TOPIC_LIMITS_UPDATED, TOPIC_MAX_FAILURES_UPDATED, TOPIC_MIGRATE,
-    TOPIC_MIGRATION_PAUSED, TOPIC_MIGRATION_TARGET_CANCELLED, TOPIC_MIGRATION_TARGET_SCHEDULED,
+    TOPIC_BLEND_WITHDRAW, TOPIC_CAPS_UPDATED, TOPIC_DEPOSIT, TOPIC_DEPOSIT_LIMITS_UPDATED,
+    TOPIC_DEX_POOL_CONFIGURED, TOPIC_DEX_SUPPLY, TOPIC_DEX_WITHDRAW, TOPIC_EMERGENCY_HARVEST,
+    TOPIC_EMERGENCY_PAUSED, TOPIC_EMERGENCY_WITHDRAWAL, TOPIC_HARVEST, TOPIC_INIT,
+    TOPIC_LIMITS_UPDATED, TOPIC_MAX_FAILURES_UPDATED, TOPIC_MIGRATE, TOPIC_MIGRATION_PAUSED,
+    TOPIC_MIGRATION_RECEIVED, TOPIC_MIGRATION_TARGET_CANCELLED, TOPIC_MIGRATION_TARGET_SCHEDULED,
     TOPIC_MIGRATION_TARGET_UPDATED, TOPIC_MULTI_PROTOCOL_MODE, TOPIC_OWNERSHIP_CANCELLED,
     TOPIC_OWNERSHIP_INITIATED, TOPIC_OWNERSHIP_TRANSFERRED, TOPIC_PAUSED,
-    TOPIC_PROTOCOL_ADAPTER_UPDATED, TOPIC_PROTOCOL_ALLOCATION_CHANGED, TOPIC_PROTOCOL_APY_UPDATED,
-    TOPIC_PROTOCOL_CHANGED, TOPIC_PROTOCOL_SUPPLY, TOPIC_PROTOCOL_WHITELIST_UPDATED,
-    TOPIC_PROTOCOL_WITHDRAW, TOPIC_QUEUE_CONFIG_UPDATED, TOPIC_RATE_LIMIT_CONFIG_UPDATED,
-    TOPIC_RATE_LIMIT_HIT, TOPIC_REBALANCE, TOPIC_REBALANCE_COOLDOWN_UPDATED,
-    TOPIC_REBALANCE_FAILED, TOPIC_SHARES_LOCKED, TOPIC_SHARES_UNLOCKED,
-    TOPIC_STANDBY_AGENT_UPDATED, TOPIC_SUPPORTED_ASSETS_UPDATED, TOPIC_TVL_CAP_UPDATED,
-    TOPIC_UNPAUSED, TOPIC_UPGRADED, TOPIC_UPGRADE_CANCELLED, TOPIC_UPGRADE_SCHEDULED,
-    TOPIC_USER_CAP_UPDATED, TOPIC_USER_STRATEGY_UPDATED, TOPIC_WITHDRAW,
+    TOPIC_PROTOCOL_ALLOCATION_CHANGED, TOPIC_PROTOCOL_APY_UPDATED, TOPIC_PROTOCOL_CHANGED,
+    TOPIC_QUEUE_CONFIG_UPDATED, TOPIC_RATE_LIMIT_CONFIG_UPDATED, TOPIC_RATE_LIMIT_HIT,
+    TOPIC_REBALANCE, TOPIC_REBALANCE_COOLDOWN_UPDATED, TOPIC_REBALANCE_FAILED, TOPIC_SHARES_LOCKED,
+    TOPIC_SHARES_UNLOCKED, TOPIC_STANDBY_AGENT_UPDATED, TOPIC_SUPPORTED_ASSETS_UPDATED,
+    TOPIC_TVL_CAP_UPDATED, TOPIC_UNPAUSED, TOPIC_UPGRADED, TOPIC_UPGRADE_CANCELLED,
+    TOPIC_UPGRADE_SCHEDULED, TOPIC_USER_CAP_UPDATED, TOPIC_USER_STRATEGY_UPDATED, TOPIC_WITHDRAW,
     TOPIC_WITHDRAWAL_CANCELLED, TOPIC_WITHDRAWAL_FULFILLED, TOPIC_WITHDRAWAL_QUEUED,
     TOPIC_YIELD_ATTRIBUTED,
 };
@@ -2321,10 +2442,15 @@ impl BlendPoolClient {
         };
         let requests: Vec<BlendRequest> = vec![env, request];
 
-        // submit(from: Address, to: Address, requests: Vec<Request>)
+        // Blend v2's real `submit` takes 4 args — from, spender, to, requests
+        // (confirmed against blend-capital/blend-contracts-v2's Pool trait) —
+        // not the 3-arg (from, to, requests) this adapter called with before
+        // (#986). The vault withdraws its own position rather than acting as
+        // a delegated spender for anyone else, so from == spender == to.
         let args: Vec<Val> = vec![
             env,
             to.into_val(env),       // from: vault address (position owner)
+            to.into_val(env),       // spender: vault address (no delegated spender)
             to.into_val(env),       // to: vault address (receives withdrawn assets)
             requests.into_val(env), // requests: vector of withdraw requests
         ];
@@ -2337,11 +2463,48 @@ impl BlendPoolClient {
         balance_after.saturating_sub(balance_before)
     }
 
-    /// Gets the balance of assets supplied to the Blend pool.
+    /// Gets the balance of assets supplied to the Blend pool, in underlying
+    /// (e.g. USDC) units.
+    ///
+    /// Blend v2 has no `balance(asset, user)` entry point at all (#986); the
+    /// adapter previously called one that does not exist, which would fail
+    /// outright against a real pool. Reading a supplied balance from the
+    /// real interface takes two calls and a unit conversion:
+    ///
+    /// 1. `get_reserve(asset) -> Reserve`, whose `config.index` is this
+    ///    asset's reserve index (the key into `Positions`' maps) and whose
+    ///    `data.b_rate` is the bToken-to-underlying conversion rate.
+    /// 2. `get_positions(user) -> Positions`, whose `supply` map (not
+    ///    `collateral` — see `BlendPositions`'s doc comment) gives the
+    ///    bToken amount at that reserve index, or none if the vault has
+    ///    never supplied this asset.
+    ///
+    /// `underlying = b_tokens * b_rate / BLEND_RATE_SCALAR`
+    /// (`Reserve::to_asset_from_b_token`, floor-rounded like Blend's own
+    /// implementation, in `pool/src/pool/reserve.rs`).
     fn get_balance(env: &Env, pool_address: &Address, asset: &Address, user: &Address) -> i128 {
         use soroban_sdk::{vec, IntoVal, Symbol};
-        let args: Vec<Val> = vec![env, asset.into_val(env), user.into_val(env)];
-        env.invoke_contract::<i128>(pool_address, &Symbol::new(env, "balance"), args)
+
+        let reserve_args: Vec<Val> = vec![env, asset.into_val(env)];
+        let reserve: BlendReserve =
+            env.invoke_contract(pool_address, &Symbol::new(env, "get_reserve"), reserve_args);
+
+        let positions_args: Vec<Val> = vec![env, user.into_val(env)];
+        let positions: BlendPositions = env.invoke_contract(
+            pool_address,
+            &Symbol::new(env, "get_positions"),
+            positions_args,
+        );
+
+        let b_tokens = positions.supply.get(reserve.config.index).unwrap_or(0);
+        if b_tokens == 0 {
+            return 0;
+        }
+
+        b_tokens
+            .checked_mul(reserve.data.b_rate)
+            .expect("vault: blend balance conversion overflow")
+            / BLEND_RATE_SCALAR
     }
 }
 
@@ -2740,7 +2903,7 @@ impl NeuroWealthVault {
             // Only written on the first deposit; later deposits grow the
             // position but the entry anchor stays the original one.
             env.storage().persistent().set(
-                &DataKey::DepositSnapshot(user.clone()),
+                &DataKeyExt::DepositSnapshot(user.clone()),
                 &DepositSnapshot {
                     shares: new_user_shares,
                     principal: amount,
@@ -2812,6 +2975,146 @@ impl NeuroWealthVault {
                 amount,
                 // Shares minted for this deposit
                 shares: shares_to_mint,
+            },
+        );
+    }
+
+    /// Credits a migrated position on the RECEIVING side of a cross-vault
+    /// `migrate_shares` call (#987).
+    ///
+    /// `migrate_shares` on the sending vault transfers `amount` of USDC
+    /// directly into this contract's own token balance *before* calling
+    /// this function — the funds have already arrived. This function only
+    /// has to mint the corresponding shares for `user`; it must NOT attempt
+    /// to pull `amount` from `user`'s wallet the way `deposit` does, since
+    /// `user` never personally held the migrated funds (they moved
+    /// vault-to-vault, not vault-to-user-to-vault). Calling the public
+    /// `deposit` entry point for this, as a previous version of
+    /// `migrate_shares` did, always failed with an "insufficient balance"
+    /// error inside the token contract's `transfer`, because it tried to
+    /// debit funds `user` never had.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment.
+    /// * `source_vault` - The vault address this migration is coming from.
+    ///   Must authorize this call (see Security below).
+    /// * `user` - The user whose position is being credited.
+    /// * `amount` - The USDC amount already transferred into this vault's
+    ///   balance for `user`.
+    ///
+    /// # Security
+    ///
+    /// `source_vault.require_auth()` is the only access gate: any address
+    /// can be *claimed* as `source_vault`, but only a caller that address
+    /// has actually authorized may proceed. In practice this means only
+    /// `migrate_shares` itself can satisfy it, because it calls this
+    /// function via `env.invoke_contract` after pre-authorizing the exact
+    /// sub-invocation with `env.authorize_as_current_contract` — the same
+    /// pattern used by `revoke_allowance_if_outstanding` elsewhere in this
+    /// contract. A contract cannot forge another contract's authorization,
+    /// so an arbitrary third party cannot call this to mint themselves free
+    /// shares. This function intentionally skips `deposit`'s min/max/cap
+    /// validation: a migrated position is not a new voluntary deposit, and
+    /// re-validating it against this vault's deposit limits could strand a
+    /// user's funds mid-migration for reasons outside their control.
+    ///
+    /// # Panics
+    ///
+    /// - If the vault is paused.
+    /// - If `amount` is not positive.
+    /// - If `shares_to_mint` would round down to zero.
+    pub fn receive_migration(env: Env, source_vault: Address, user: Address, amount: i128) {
+        Self::require_initialized(&env);
+        source_vault.require_auth();
+        Self::require_not_paused(&env);
+        Self::require_positive_amount(&env, amount);
+
+        let shares_to_mint = Self::convert_to_shares_internal(&env, amount);
+        Self::require(
+            &env,
+            shares_to_mint > 0,
+            VaultError::SharesToMintMustBePositive,
+        );
+
+        let current_shares: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Shares(user.clone()))
+            .unwrap_or(0_i128);
+        let new_user_shares = current_shares
+            .checked_add(shares_to_mint)
+            .expect("vault: user shares overflow");
+        env.storage()
+            .persistent()
+            .set(&DataKey::Shares(user.clone()), &new_user_shares);
+
+        if current_shares == 0 {
+            Self::add_to_user_index(&env, &user);
+
+            env.storage().persistent().set(
+                &DataKeyExt::DepositSnapshot(user.clone()),
+                &DepositSnapshot {
+                    shares: new_user_shares,
+                    principal: amount,
+                    deposited_at: env.ledger().timestamp(),
+                },
+            );
+        }
+
+        if current_shares == 0
+            && !env
+                .storage()
+                .persistent()
+                .has(&DataKey::UserStrategy(user.clone()))
+        {
+            let default_strategy = Symbol::new(&env, "balanced");
+            env.storage()
+                .persistent()
+                .set(&DataKey::UserStrategy(user.clone()), &default_strategy);
+
+            env.events().publish(
+                (TOPIC_USER_STRATEGY_UPDATED, user.clone()),
+                UserStrategyUpdatedEvent {
+                    user: user.clone(),
+                    old_strategy: Symbol::new(&env, ""),
+                    new_strategy: default_strategy,
+                },
+            );
+        }
+
+        let total_shares: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalShares)
+            .unwrap_or(0_i128);
+        env.storage().instance().set(
+            &DataKey::TotalShares,
+            &(total_shares
+                .checked_add(shares_to_mint)
+                .expect("vault: total shares overflow")),
+        );
+
+        let total_assets = Self::get_total_assets_internal(&env);
+        env.storage().instance().set(
+            &DataKey::TotalAssets,
+            &(total_assets
+                .checked_add(amount)
+                .expect("vault: total assets overflow")),
+        );
+
+        env.storage().persistent().set(
+            &DataKey::LastDepositLedger(user.clone()),
+            &env.ledger().sequence(),
+        );
+
+        env.events().publish(
+            (TOPIC_MIGRATION_RECEIVED, user.clone()),
+            MigrationReceivedEvent {
+                user,
+                source_vault,
+                amount,
+                shares_minted: shares_to_mint,
             },
         );
     }
@@ -2923,6 +3226,19 @@ impl NeuroWealthVault {
             // this missing: without it, a batch_deposit-only holder never
             // appears in `get_users_with_shares`).
             Self::add_to_user_index(&env, &user);
+
+            // Realized-APY snapshot (#462), mirroring `deposit`.
+            let new_user_shares = current_shares
+                .checked_add(shares_to_mint)
+                .expect("batch_deposit: shares overflow");
+            env.storage().persistent().set(
+                &DataKeyExt::DepositSnapshot(user.clone()),
+                &DepositSnapshot {
+                    shares: new_user_shares,
+                    principal: total_amount,
+                    deposited_at: env.ledger().timestamp(),
+                },
+            );
         }
 
         if current_shares == 0
@@ -2961,12 +3277,12 @@ impl NeuroWealthVault {
         // Without this, TotalAssets silently falls behind real holdings
         // and understates the share price for every other holder.
         let total_assets = Self::get_total_assets_internal(&env);
-        env.storage().instance().set(
-            &DataKey::TotalAssets,
-            &(total_assets
-                .checked_add(total_amount)
-                .expect("batch_deposit: total assets overflow")),
-        );
+        let new_total_assets = total_assets
+            .checked_add(total_amount)
+            .expect("batch_deposit: total assets overflow");
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalAssets, &new_total_assets);
 
         // Record deposit ledger for flash-loan protection (#659, #990).
         // Without this, a user could enter via batch_deposit and withdraw
@@ -3417,6 +3733,17 @@ impl NeuroWealthVault {
             .unwrap_or(0_i128);
         Self::require(&env, user_shares > 0, VaultError::NoSharesToMigrate);
 
+        // migrate_shares always moves the user's entire position (there is
+        // no partial-amount parameter), so unlike `withdraw` it cannot
+        // exclude just the locked portion — a lock must block migration
+        // outright until it expires, otherwise a locked position's "lock"
+        // is meaningless the moment migration is available. Without this,
+        // migrating a fully-locked user left LockedShares(user) >
+        // Shares(user) == 0 afterward, a broken invariant caught by the
+        // #987 fuzz harness.
+        let (locked_shares, _lock_expiry) = Self::read_lock_state(&env, &user);
+        Self::require(&env, locked_shares == 0, VaultError::InsufficientShares);
+
         // Calculate asset value using current exchange rate
         let total_shares = Self::get_total_shares_internal(&env);
         let total_assets = Self::get_total_assets_internal(&env);
@@ -3443,26 +3770,38 @@ impl NeuroWealthVault {
             .instance()
             .set(&DataKey::TotalAssets, &new_total_assets);
 
-        // Transfer USDC to new vault and call deposit on behalf of user
+        // Transfer USDC to new vault, then credit the migrated position via
+        // its `receive_migration` entry point — NOT its public `deposit`,
+        // which would try to pull `assets_to_transfer` from `user`'s own
+        // wallet a second time (the funds already moved vault-to-vault on
+        // the line above; `user` never personally held them). See
+        // `receive_migration`'s doc comment for the full explanation.
         let usdc_token: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
         let token_client = token::Client::new(&env, &usdc_token);
-        token_client.transfer(
-            &env.current_contract_address(),
-            &migration_target,
-            &assets_to_transfer,
-        );
+        let source_vault = env.current_contract_address();
+        token_client.transfer(&source_vault, &migration_target, &assets_to_transfer);
 
-        // Call deposit on new vault on behalf of user using cross-contract call
-        // The new vault must implement a deposit function with signature (Env, Address, i128)
-        let deposit_args: Vec<Val> = vec![
+        let receive_args: Vec<Val> = vec![
             &env,
+            source_vault.clone().into_val(&env),
             user.clone().into_val(&env),
             assets_to_transfer.into_val(&env),
         ];
+        env.authorize_as_current_contract(vec![
+            &env,
+            InvokerContractAuthEntry::Contract(SubContractInvocation {
+                context: ContractContext {
+                    contract: migration_target.clone(),
+                    fn_name: Symbol::new(&env, "receive_migration"),
+                    args: receive_args.clone(),
+                },
+                sub_invocations: vec![&env],
+            }),
+        ]);
         env.invoke_contract::<()>(
             &migration_target,
-            &Symbol::new(&env, "deposit"),
-            deposit_args,
+            &Symbol::new(&env, "receive_migration"),
+            receive_args,
         );
 
         // Emit migration event
@@ -4627,11 +4966,29 @@ impl NeuroWealthVault {
     ///
     /// The owner must authorize the call. Read-only getters, rate-limit
     /// configuration, and TTL maintenance remain available while paused.
+    ///
+    /// # Errors
+    ///
+    /// - [`VaultError::OnlyOwnerCanPause`] if the caller is not the owner.
+    /// - [`VaultError::AlreadyPaused`] if the vault is already paused (#988).
+    ///   Mirrors `unpause`'s existing `NotPaused` guard — both transitions
+    ///   now reject a no-op call instead of silently repeating the
+    ///   `VaultPausedEvent`/`VaultUnpausedEvent` emission. This differs
+    ///   deliberately from `emergency_pause`, which instead no-ops
+    ///   (no error, no event) when already paused — see that function's
+    ///   doc comment for why that convention is kept separate.
     pub fn pause(env: Env, owner: Address) {
         Self::require_initialized(&env);
         owner.require_auth();
         let stored_owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
         Self::require(&env, owner == stored_owner, VaultError::OnlyOwnerCanPause);
+
+        let already_paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        Self::require(&env, !already_paused, VaultError::AlreadyPaused);
 
         env.storage().instance().set(&DataKey::Paused, &true);
 
@@ -4687,7 +5044,17 @@ impl NeuroWealthVault {
     /// Emergency pause function that immediately halts all operations.
     ///
     /// This is a separate function from pause() to distinguish emergency
-    /// situations in event logs. Functionally identical to pause().
+    /// situations in event logs. Functionally identical to pause(), with
+    /// one deliberate difference (#988): calling this while the vault is
+    /// already paused is a silent no-op (no error, no event), whereas
+    /// `pause()` now rejects a repeat call with
+    /// [`VaultError::AlreadyPaused`]. The asymmetry is intentional — an
+    /// emergency responder racing another caller to pause the vault should
+    /// never be blocked by an error just because they were a few blocks
+    /// too slow; the vault ends up paused either way, which is the only
+    /// outcome that matters in an emergency. `pause()`, by contrast, is the
+    /// deliberate, non-emergency path, where a rejected repeat call is
+    /// useful signal (e.g. a misconfigured automation retrying blindly).
     ///
     /// # Arguments
     ///
@@ -5670,11 +6037,11 @@ impl NeuroWealthVault {
         let old_max_entries: u32 = env
             .storage()
             .instance()
-            .get(&DataKey::MaxBatchSize)
+            .get(&DataKeyExt::MaxBatchSize)
             .unwrap_or(DEFAULT_MAX_BATCH_SIZE);
         env.storage()
             .instance()
-            .set(&DataKey::MaxBatchSize, &max_entries);
+            .set(&DataKeyExt::MaxBatchSize, &max_entries);
 
         let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
         env.events().publish(
@@ -5694,7 +6061,7 @@ impl NeuroWealthVault {
         Self::require_initialized(&env);
         env.storage()
             .instance()
-            .get(&DataKey::MaxBatchSize)
+            .get(&DataKeyExt::MaxBatchSize)
             .unwrap_or(DEFAULT_MAX_BATCH_SIZE)
     }
 
@@ -6534,16 +6901,7 @@ impl NeuroWealthVault {
     /// * `None` when no standby key is set (single-key operation).
     pub fn get_standby_agent(env: Env) -> Option<Address> {
         Self::require_initialized(&env);
-        Self::read_standby_agent_state(&env).0
-    }
-
-    /// Reads the stored `(standby_agent, timelock_expiry_ledger)` hot-standby
-    /// state, defaulting to `(None, 0)` when no standby key has ever been set.
-    fn read_standby_agent_state(env: &Env) -> (Option<Address>, u32) {
-        env.storage()
-            .instance()
-            .get(&DataKey::StandbyAgentState)
-            .unwrap_or((None, 0))
+        env.storage().instance().get(&DataKeyExt::StandbyAgent)
     }
 
     /// Sets or replaces the standby agent key independently (#653).
@@ -6576,19 +6934,17 @@ impl NeuroWealthVault {
         Self::require_is_owner(&env);
 
         let primary: Address = env.storage().instance().get(&DataKey::Agent).unwrap();
-        Self::require(&env, new_standby != primary, VaultError::NotInitialized);
-
-        let (old_standby, _old_expiry) = Self::read_standby_agent_state(&env);
-
-        let effective_ledger = env
-            .ledger()
-            .sequence()
-            .saturating_add(AGENT_TIMELOCK_LEDGERS);
-
-        env.storage().instance().set(
-            &DataKey::StandbyAgentState,
-            &(Some(new_standby.clone()), effective_ledger),
+        Self::require(
+            &env,
+            new_standby != primary,
+            VaultError::StandbyMatchesPrimaryAgent,
         );
+
+        let old_standby: Option<Address> = env.storage().instance().get(&DataKeyExt::StandbyAgent);
+
+        env.storage()
+            .instance()
+            .set(&DataKeyExt::StandbyAgent, &new_standby);
 
         let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
         env.events().publish(
@@ -6631,31 +6987,23 @@ impl NeuroWealthVault {
         Self::require_is_owner(&env);
 
         let old_primary: Address = env.storage().instance().get(&DataKey::Agent).unwrap();
-        let (standby, _expiry) = Self::read_standby_agent_state(&env);
+        let standby: Option<Address> = env.storage().instance().get(&DataKeyExt::StandbyAgent);
 
         let new_primary =
             standby.unwrap_or_else(|| panic_with_error!(&env, VaultError::NotInitialized));
 
         // Deliberately no timelock check here: this is the zero-downtime
-        // instant rotation path (see docstring above). The expiry tracked
-        // alongside the standby address is informational only (surfaced via
-        // the standby state) and does not gate this call; only the two-step
+        // instant rotation path (see docstring above); only the two-step
         // `update_agent` / `confirm_agent_update` flow is time-delayed.
 
         // Promote standby to primary.
         env.storage().instance().set(&DataKey::Agent, &new_primary);
 
         // Demote old primary to standby (so the operator can rotate it out
-        // at leisure via update_standby_agent) and clear the timelock on the
-        // new standby (old primary).
-        let new_expiry = env
-            .ledger()
-            .sequence()
-            .saturating_add(AGENT_TIMELOCK_LEDGERS);
-        env.storage().instance().set(
-            &DataKey::StandbyAgentState,
-            &(Some(old_primary.clone()), new_expiry),
-        );
+        // at leisure via update_standby_agent).
+        env.storage()
+            .instance()
+            .set(&DataKeyExt::StandbyAgent, &old_primary);
 
         let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
         env.events().publish(
@@ -7332,7 +7680,7 @@ impl NeuroWealthVault {
     ) {
         Self::require_initialized(&env);
         let stored_agent: Address = env.storage().instance().get(&DataKey::Agent).unwrap();
-        let (standby, _expiry) = Self::read_standby_agent_state(&env);
+        let standby: Option<Address> = env.storage().instance().get(&DataKeyExt::StandbyAgent);
         // Hot-standby (#653): the standby key may also publish asset updates.
         // Absent a standby key this reduces to the original single-key check.
         let is_agent = agent == stored_agent || standby.map(|s| agent == s).unwrap_or(false);
@@ -8468,7 +8816,7 @@ impl NeuroWealthVault {
         let snapshot: Option<DepositSnapshot> = env
             .storage()
             .persistent()
-            .get(&DataKey::DepositSnapshot(user.clone()));
+            .get(&DataKeyExt::DepositSnapshot(user.clone()));
         let Some(snapshot) = snapshot else {
             return 0;
         };
@@ -9107,7 +9455,9 @@ impl NeuroWealthVault {
         Self::require_is_owner(&env);
 
         let config = QueueConfig { max_size, ttl };
-        env.storage().instance().set(&DataKey::QueueConfig, &config);
+        env.storage()
+            .instance()
+            .set(&DataKeyExt::QueueConfig, &config);
 
         let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
         env.events().publish(
@@ -9128,7 +9478,7 @@ impl NeuroWealthVault {
         let config: QueueConfig = env
             .storage()
             .instance()
-            .get(&DataKey::QueueConfig)
+            .get(&DataKeyExt::QueueConfig)
             .unwrap_or(QueueConfig {
                 max_size: 0,
                 ttl: 0,
@@ -9192,10 +9542,14 @@ impl NeuroWealthVault {
         let total_reserved_after = already_reserved
             .checked_add(amount)
             .expect("vault: reserved withdrawal amount overflow");
-        // True ceiling division (#990): the previous `x / y + 1` always
-        // added 1 even when `x` divided evenly into `y`, so requesting a
-        // user's exact full balance was spuriously rejected. `(x + y - 1)
-        // / y` rounds up only when there is a genuine remainder.
+        // True ceiling division — the exact inverse of get_balance's floor
+        // division (shares * total_assets / total_shares) — so that a
+        // request for a user's exact current balance resolves to exactly
+        // their current share count, never one more. `(x + y - 1) / y`
+        // rounds up only when there is a genuine remainder, unlike an
+        // unconditional `x / y + 1`, which would overshoot by a full share
+        // on an exact division and spuriously reject a legitimate
+        // full-balance withdrawal request with InsufficientSharesForAmount.
         let shares_needed = if total_shares > 0 {
             let numerator = total_reserved_after
                 .checked_mul(total_shares)
@@ -9215,7 +9569,7 @@ impl NeuroWealthVault {
         let config: QueueConfig = env
             .storage()
             .instance()
-            .get(&DataKey::QueueConfig)
+            .get(&DataKeyExt::QueueConfig)
             .unwrap_or(QueueConfig {
                 max_size: 0,
                 ttl: 0,
@@ -9225,7 +9579,7 @@ impl NeuroWealthVault {
             let order: Vec<u32> = env
                 .storage()
                 .instance()
-                .get(&DataKey::QueueOrder)
+                .get(&DataKeyExt::QueueOrder)
                 .unwrap_or_else(|| Vec::new(&env));
             Self::require(
                 &env,
@@ -9240,12 +9594,12 @@ impl NeuroWealthVault {
         let next_id: u32 = env
             .storage()
             .instance()
-            .get(&DataKey::NextRequestId)
+            .get(&DataKeyExt::NextRequestId)
             .unwrap_or(1u32);
         let request_id = next_id;
         env.storage()
             .instance()
-            .set(&DataKey::NextRequestId, &(next_id + 1));
+            .set(&DataKeyExt::NextRequestId, &(next_id + 1));
 
         let timestamp = env.ledger().timestamp();
         let request = WithdrawalRequest {
@@ -9257,16 +9611,18 @@ impl NeuroWealthVault {
         };
         env.storage()
             .instance()
-            .set(&DataKey::WithdrawalRequest(request_id), &request);
+            .set(&DataKeyExt::WithdrawalRequest(request_id), &request);
 
         // Append to order queue
         let mut order: Vec<u32> = env
             .storage()
             .instance()
-            .get(&DataKey::QueueOrder)
+            .get(&DataKeyExt::QueueOrder)
             .unwrap_or_else(|| Vec::new(&env));
         order.push_back(request_id);
-        env.storage().instance().set(&DataKey::QueueOrder, &order);
+        env.storage()
+            .instance()
+            .set(&DataKeyExt::QueueOrder, &order);
 
         env.events().publish(
             (TOPIC_WITHDRAWAL_QUEUED,),
@@ -9286,7 +9642,7 @@ impl NeuroWealthVault {
         Self::require_initialized(&env);
         env.storage()
             .instance()
-            .get(&DataKey::WithdrawalRequest(request_id))
+            .get(&DataKeyExt::WithdrawalRequest(request_id))
             .expect("withdrawal request not found")
     }
 
@@ -9310,28 +9666,31 @@ impl NeuroWealthVault {
         let request: WithdrawalRequest = env
             .storage()
             .instance()
-            .get(&DataKey::WithdrawalRequest(request_id))
+            .get(&DataKeyExt::WithdrawalRequest(request_id))
             .expect("withdrawal request not found");
 
-        // No dedicated "request already settled" / "caller is not the request
-        // owner" error codes exist and the enum is already at its de facto
-        // cap (see the comment above `impl VaultError`), so the closest
-        // existing generic codes are reused here (mirroring the
-        // `InvalidStrategy` reuse in `set_max_consecutive_failures`).
-        Self::require(&env, !request.fulfilled, VaultError::InvalidStrategy);
-        Self::require(&env, !request.cancelled, VaultError::InvalidStrategy);
-        Self::require(&env, request.user == user, VaultError::CallerIsNotOwner);
+        Self::require(
+            &env,
+            !request.fulfilled,
+            VaultError::WithdrawalRequestAlreadyFulfilled,
+        );
+        Self::require(
+            &env,
+            !request.cancelled,
+            VaultError::WithdrawalRequestAlreadyCancelled,
+        );
+        Self::require(&env, request.user == user, VaultError::NotRequestOwner);
 
         Self::adjust_reserved_withdrawal_amount(&env, &user, -request.amount);
 
         env.storage()
             .instance()
-            .remove(&DataKey::WithdrawalRequest(request_id));
+            .remove(&DataKeyExt::WithdrawalRequest(request_id));
 
         let order: Vec<u32> = env
             .storage()
             .instance()
-            .get(&DataKey::QueueOrder)
+            .get(&DataKeyExt::QueueOrder)
             .unwrap_or_else(|| Vec::new(&env));
         let mut remaining = Vec::new(&env);
         for id in order.iter() {
@@ -9341,7 +9700,7 @@ impl NeuroWealthVault {
         }
         env.storage()
             .instance()
-            .set(&DataKey::QueueOrder, &remaining);
+            .set(&DataKeyExt::QueueOrder, &remaining);
 
         env.events().publish(
             (TOPIC_WITHDRAWAL_CANCELLED,),
@@ -9464,7 +9823,7 @@ impl NeuroWealthVault {
         let order: Vec<u32> = env
             .storage()
             .instance()
-            .get(&DataKey::QueueOrder)
+            .get(&DataKeyExt::QueueOrder)
             .unwrap_or_else(|| Vec::new(&env));
 
         let mut user_position_in_queue: Option<u32> = None;
@@ -9472,7 +9831,7 @@ impl NeuroWealthVault {
             if let Some(request) = env
                 .storage()
                 .instance()
-                .get::<DataKey, WithdrawalRequest>(&DataKey::WithdrawalRequest(request_id))
+                .get::<_, WithdrawalRequest>(&DataKeyExt::WithdrawalRequest(request_id))
             {
                 if request.user == user && !request.fulfilled && !request.cancelled {
                     user_position_in_queue = Some(index as u32);
@@ -9531,7 +9890,7 @@ impl NeuroWealthVault {
         let config: QueueConfig = env
             .storage()
             .instance()
-            .get(&DataKey::QueueConfig)
+            .get(&DataKeyExt::QueueConfig)
             .unwrap_or(QueueConfig {
                 max_size: 0,
                 ttl: 0,
@@ -9542,7 +9901,7 @@ impl NeuroWealthVault {
         let order: Vec<u32> = env
             .storage()
             .instance()
-            .get(&DataKey::QueueOrder)
+            .get(&DataKeyExt::QueueOrder)
             .unwrap_or_else(|| Vec::new(&env));
 
         let mut processed = 0u32;
@@ -9559,7 +9918,7 @@ impl NeuroWealthVault {
             let Some(request): Option<WithdrawalRequest> = env
                 .storage()
                 .instance()
-                .get(&DataKey::WithdrawalRequest(id))
+                .get(&DataKeyExt::WithdrawalRequest(id))
             else {
                 // Compact legacy queue entries whose records were already removed.
                 continue;
@@ -9569,7 +9928,7 @@ impl NeuroWealthVault {
             if request.cancelled || request.fulfilled {
                 env.storage()
                     .instance()
-                    .remove(&DataKey::WithdrawalRequest(id));
+                    .remove(&DataKeyExt::WithdrawalRequest(id));
                 continue;
             }
 
@@ -9578,7 +9937,7 @@ impl NeuroWealthVault {
                 Self::adjust_reserved_withdrawal_amount(&env, &request.user, -request.amount);
                 env.storage()
                     .instance()
-                    .remove(&DataKey::WithdrawalRequest(id));
+                    .remove(&DataKeyExt::WithdrawalRequest(id));
                 continue;
             }
 
@@ -9602,7 +9961,7 @@ impl NeuroWealthVault {
             // Fulfil only after payment and share accounting have succeeded.
             env.storage()
                 .instance()
-                .remove(&DataKey::WithdrawalRequest(id));
+                .remove(&DataKeyExt::WithdrawalRequest(id));
 
             processed += 1;
 
@@ -9618,9 +9977,9 @@ impl NeuroWealthVault {
 
         env.storage()
             .instance()
-            .set(&DataKey::QueueOrder, &new_order);
+            .set(&DataKeyExt::QueueOrder, &new_order);
         env.storage().instance().set(
-            &DataKey::WithdrawalQueueStorageVersion,
+            &DataKeyExt::WithdrawalQueueStorageVersion,
             &WITHDRAWAL_QUEUE_STORAGE_VERSION,
         );
 
@@ -9938,7 +10297,7 @@ impl NeuroWealthVault {
         );
         env.storage()
             .instance()
-            .set(&DataKey::MaxBatchSize, &DEFAULT_MAX_BATCH_SIZE);
+            .set(&DataKeyExt::MaxBatchSize, &DEFAULT_MAX_BATCH_SIZE);
     }
 
     /// Returns whether `category` is one of the supported rate-limit buckets.
@@ -10029,7 +10388,10 @@ impl NeuroWealthVault {
         let state: Option<RateLimitState> = if let Some(user) = user {
             env.storage()
                 .instance()
-                .get(&DataKey::RateLimitUserState(user.clone(), category.clone()))
+                .get(&DataKeyExt::RateLimitUserState(
+                    user.clone(),
+                    category.clone(),
+                ))
         } else {
             env.storage()
                 .instance()
@@ -10066,13 +10428,25 @@ impl NeuroWealthVault {
             return;
         }
 
-        let key = if let Some(user) = user {
-            DataKey::RateLimitUserState(user.clone(), category.clone())
-        } else {
-            DataKey::RateLimitGlobalState(category.clone())
-        };
+        // `DataKey` hit soroban-sdk's 50-variant `#[contracttype]` ceiling, so
+        // the per-user key lives in the newer `DataKeyExt` enum while the
+        // global key stayed in `DataKey` (#985-988 cleanup). The two key
+        // types differ, so the get/set pair is branched instead of unified
+        // behind one `key` variable.
         let current_ledger = env.ledger().sequence();
-        let stored_state: Option<RateLimitState> = env.storage().instance().get(&key);
+        let stored_state: Option<RateLimitState> = match user {
+            Some(user) => env
+                .storage()
+                .instance()
+                .get(&DataKeyExt::RateLimitUserState(
+                    user.clone(),
+                    category.clone(),
+                )),
+            None => env
+                .storage()
+                .instance()
+                .get(&DataKey::RateLimitGlobalState(category.clone())),
+        };
         let mut state = match stored_state {
             Some(state)
                 if current_ledger.saturating_sub(state.window_start) < config.window_ledgers =>
@@ -10101,7 +10475,16 @@ impl NeuroWealthVault {
         }
 
         state.calls = state.calls.saturating_add(1);
-        env.storage().instance().set(&key, &state);
+        match user {
+            Some(user) => env.storage().instance().set(
+                &DataKeyExt::RateLimitUserState(user.clone(), category.clone()),
+                &state,
+            ),
+            None => env
+                .storage()
+                .instance()
+                .set(&DataKey::RateLimitGlobalState(category.clone()), &state),
+        }
     }
 
     /// Enforces a per-user call allowance.
@@ -10122,7 +10505,7 @@ impl NeuroWealthVault {
     fn get_max_batch_size_internal(env: &Env) -> u32 {
         env.storage()
             .instance()
-            .get(&DataKey::MaxBatchSize)
+            .get(&DataKeyExt::MaxBatchSize)
             .unwrap_or(DEFAULT_MAX_BATCH_SIZE)
     }
 
@@ -10196,25 +10579,36 @@ impl NeuroWealthVault {
     /// then try standby" without a caller-supplied identity to check against
     /// the stored primary/standby addresses first.
     ///
+    /// # Arguments
+    /// * `caller` - The address the entry point's caller claims to be. Must
+    ///   be either the primary agent or the standby agent, and must
+    ///   authorize this call.
+    ///
     /// # Panics
     /// - If `caller` is neither the primary agent nor the standby agent.
-    /// - If `caller` does not authorize this invocation.
+    /// - If `caller` does not authorize this call.
+    ///
+    /// `env.auths()` (a `testutils`-only introspection of which addresses
+    /// signed, usable only in tests, never in a deployed contract) cannot be
+    /// used here: production code has no way to ask "who signed this
+    /// transaction" other than taking the claimed identity as a parameter and
+    /// calling `require_auth()` on it, which is why `caller` exists.
     #[inline]
     fn require_is_agent(env: &Env, caller: &Address) {
         Self::require_initialized(env);
-        caller.require_auth();
 
         let agent: Address = env.storage().instance().get(&DataKey::Agent).unwrap();
-        let (standby, _expiry) = Self::read_standby_agent_state(env);
+        let standby: Option<Address> = env.storage().instance().get(&DataKeyExt::StandbyAgent);
 
-        let is_agent = caller == &agent;
-        let is_standby = standby.as_ref().map(|s| caller == s).unwrap_or(false);
-
+        let is_agent = *caller == agent;
+        let is_standby = standby.as_ref().is_some_and(|s| caller == s);
         Self::require(
             env,
             is_agent || is_standby,
             VaultError::UnauthorizedAgentError,
         );
+
+        caller.require_auth();
     }
 
     /// Validates that an amount is positive.
@@ -10565,7 +10959,7 @@ impl NeuroWealthVault {
         };
         Self::require(env, user_shares > 0, no_shares_error);
 
-        let (locked_shares, _lock_expiry) = Self::read_lock_state(env, user);
+        let (locked_shares, lock_expiry) = Self::read_lock_state(env, user);
         let shares_for_redemption = if mode == BurnAndPayMode::All && locked_shares > 0 {
             let unlocked_shares = user_shares
                 .checked_sub(locked_shares)
@@ -10661,7 +11055,17 @@ impl NeuroWealthVault {
             VaultError::InsufficientSharesForAmount,
         );
 
-        if mode == BurnAndPayMode::Requested && locked_shares > 0 {
+        // Locked shares (from `lock_shares`) must never be burned before
+        // their lock expires, regardless of withdrawal mode. `All` mode
+        // already excludes locked shares from `shares_for_redemption` above;
+        // `Requested` and `Emergency` both burn against the user's raw share
+        // balance, so both need this explicit floor. Without it here,
+        // `emergency_withdraw` could silently drain a user's locked
+        // position during a pause, leaving `LockedShares(user) >
+        // Shares(user)` afterward.
+        if (mode == BurnAndPayMode::Requested || mode == BurnAndPayMode::Emergency)
+            && locked_shares > 0
+        {
             let remaining_shares = user_shares
                 .checked_sub(shares_to_burn)
                 .unwrap_or_else(|| panic_with_error!(env, VaultError::InsufficientSharesForAmount));
@@ -10689,6 +11093,19 @@ impl NeuroWealthVault {
             .set(&DataKey::Shares(user.clone()), &new_user_shares);
         if new_user_shares == 0 {
             Self::prune_user_from_index(env, user);
+        }
+
+        // Defensive backstop: LockedShares must never exceed the user's
+        // remaining Shares after any burn, in any mode. The guard above
+        // already prevents this for Requested/Emergency, and All mode's
+        // `shares_for_redemption` exclusion prevents it there too, but this
+        // clamp keeps the invariant true even if a future mode or code path
+        // forgets to apply the same protection.
+        if locked_shares > new_user_shares {
+            env.storage().persistent().set(
+                &DataKey::LockState(user.clone()),
+                &(new_user_shares, lock_expiry),
+            );
         }
 
         let new_total_shares = total_shares
@@ -10766,9 +11183,15 @@ impl NeuroWealthVault {
 
     /// Converts the public slippage tolerance into a minimum for one leg.
     /// Legacy values above the bps denominator remain absolute minimums.
-    /// `slippage_bps == 0` means "no minimum-output check" and returns `0`
-    /// immediately, rather than computing a zero-tolerance minimum equal to
-    /// the full expected amount.
+    ///
+    /// `slippage_bps == 0` means "no minimum-output check" throughout the
+    /// public API (see `rebalance`'s and `harvest`'s doc comments: "If a leg
+    /// moves fewer assets than `min_out` when `min_out > 0`"), so it must
+    /// return `0` here rather than `expected` — otherwise every zero-slippage
+    /// call would demand the *exact* full expected amount with no tolerance
+    /// at all, turning graceful partial-fill/incomplete-exit handling (e.g.
+    /// `rebalance`'s abort-and-emit-`RebalanceFailedEvent` path, `harvest`'s
+    /// circuit-breaker accounting) into an unconditional panic instead.
     fn minimum_out_for_leg(expected: i128, slippage_bps: i128) -> i128 {
         if slippage_bps == 0 {
             return 0;
@@ -10778,6 +11201,45 @@ impl NeuroWealthVault {
         }
         expected.saturating_mul(Self::BPS_DENOMINATOR as i128 - slippage_bps)
             / Self::BPS_DENOMINATOR as i128
+    }
+
+    /// Revokes any allowance `spender` still holds over `from`'s tokens.
+    ///
+    /// Called after a supply leg pulls less than the vault approved for it
+    /// (#985). Checking `allowance()` first (a free read, no authorization
+    /// needed) avoids an unnecessary approve(..., 0, ...) write, and its own
+    /// authorization, when the pool already consumed the full amount via its
+    /// `transfer_from` and nothing is left outstanding.
+    fn revoke_allowance_if_outstanding(
+        env: &Env,
+        token_address: &Address,
+        from: &Address,
+        spender: &Address,
+    ) {
+        let token_client = token::Client::new(env, token_address);
+        if token_client.allowance(from, spender) == 0 {
+            return;
+        }
+
+        let revoke_args: Vec<Val> = vec![
+            env,
+            from.clone().into_val(env),
+            spender.clone().into_val(env),
+            0_i128.into_val(env),
+            0_u32.into_val(env),
+        ];
+        env.authorize_as_current_contract(vec![
+            env,
+            InvokerContractAuthEntry::Contract(SubContractInvocation {
+                context: ContractContext {
+                    contract: token_address.clone(),
+                    fn_name: Symbol::new(env, "approve"),
+                    args: revoke_args,
+                },
+                sub_invocations: vec![env],
+            }),
+        ]);
+        token_client.approve(from, spender, &0_i128, &0_u32);
     }
 
     /// Internal helper: Supplies USDC to the Blend pool.
@@ -10894,6 +11356,14 @@ impl NeuroWealthVault {
         // Call Blend supply function
         let supplied =
             BlendPoolClient::supply(env, &pool_address, &usdc_token, amount, &vault_address);
+
+        // The pool pulled less than it was approved for: revoke the leftover
+        // allowance rather than leaving it live until approval_ledger, where
+        // a later call (or a compromised/upgraded pool) could pull more
+        // vault USDC than this supply ever authorized (#985).
+        if supplied < amount {
+            Self::revoke_allowance_if_outstanding(env, &usdc_token, &vault_address, &pool_address);
+        }
 
         Self::require_min_out(env, supplied, Self::minimum_out_for_leg(amount, min_out));
 
@@ -11095,6 +11565,13 @@ impl NeuroWealthVault {
             Self::minimum_out_for_leg(amount, min_out),
             &vault_address,
         );
+
+        // Same leftover-allowance revocation as supply_to_blend (#985): if
+        // the DEX pool pulled less than approved, nothing should stay
+        // outstanding until approval_ledger.
+        if supplied < amount {
+            Self::revoke_allowance_if_outstanding(env, &usdc_token, &vault_address, &pool_address);
+        }
 
         Self::require_min_out(env, supplied, Self::minimum_out_for_leg(amount, min_out));
 

@@ -19,7 +19,7 @@ fn test_blend_pool_rotation_while_deployed_exits_old_before_entering_new() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (contract_id, agent, owner, usdc_token, old_pool) = setup_vault_with_token_and_blend(&env);
+    let (contract_id, _agent, owner, usdc_token, old_pool) = setup_vault_with_token_and_blend(&env);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
     let old_pool_client = MockBlendPoolClient::new(&env, &old_pool);
     let token_client = TestTokenClient::new(&env, &usdc_token);
@@ -31,7 +31,7 @@ fn test_blend_pool_rotation_while_deployed_exits_old_before_entering_new() {
     mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
 
     // Rebalance to Blend — funds deployed to old pool
-    client.rebalance(&agent, &symbol_short!("blend"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &500_i128, &0_i128);
     assert_eq!(client.get_current_protocol(), symbol_short!("blend"));
     assert_eq!(old_pool_client.supplied(&usdc_token), deposit_amount);
     assert_eq!(token_client.balance(&contract_id), 0_i128); // All deployed
@@ -48,7 +48,7 @@ fn test_blend_pool_rotation_while_deployed_exits_old_before_entering_new() {
     assert_eq!(client.get_current_protocol(), symbol_short!("blend"));
 
     // REBALANCE: Exit old pool, enter new pool
-    client.rebalance(&agent, &symbol_short!("blend"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &500_i128, &0_i128);
 
     // Verify the rotation: funds exited old pool, entered new pool
     assert_eq!(
@@ -80,7 +80,7 @@ fn test_dex_pool_rotation_while_deployed_exits_old_before_entering_new() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (contract_id, agent, owner, usdc_token, old_pool) = setup_vault_with_token_and_dex(&env);
+    let (contract_id, _agent, owner, usdc_token, old_pool) = setup_vault_with_token_and_dex(&env);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
     let old_pool_client = MockDexPoolClient::new(&env, &old_pool);
     let token_client = TestTokenClient::new(&env, &usdc_token);
@@ -92,7 +92,7 @@ fn test_dex_pool_rotation_while_deployed_exits_old_before_entering_new() {
     mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
 
     // Rebalance to DEX — funds deployed to old pool
-    client.rebalance(&agent, &symbol_short!("dex"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("dex"), &500_i128, &0_i128);
     assert_eq!(client.get_current_protocol(), symbol_short!("dex"));
     assert_eq!(
         old_pool_client.balance(&usdc_token, &contract_id),
@@ -112,7 +112,7 @@ fn test_dex_pool_rotation_while_deployed_exits_old_before_entering_new() {
     assert_eq!(client.get_current_protocol(), symbol_short!("dex"));
 
     // REBALANCE: Exit old pool, enter new pool
-    client.rebalance(&agent, &symbol_short!("dex"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("dex"), &500_i128, &0_i128);
 
     // Verify the rotation: funds exited old pool, entered new pool
     assert_eq!(
@@ -143,7 +143,7 @@ fn test_blend_pool_rotation_to_same_address_is_noop() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (contract_id, agent, owner, usdc_token, pool) = setup_vault_with_token_and_blend(&env);
+    let (contract_id, _agent, owner, usdc_token, pool) = setup_vault_with_token_and_blend(&env);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
     let pool_client = MockBlendPoolClient::new(&env, &pool);
     let token_client = TestTokenClient::new(&env, &usdc_token);
@@ -153,7 +153,7 @@ fn test_blend_pool_rotation_to_same_address_is_noop() {
     let user = Address::generate(&env);
     let deposit_amount = 10_000_000_i128;
     mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
-    client.rebalance(&agent, &symbol_short!("blend"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &500_i128, &0_i128);
     assert_eq!(pool_client.supplied(&usdc_token), deposit_amount);
 
     // Set pool to the same address — should be a silent no-op
@@ -161,7 +161,7 @@ fn test_blend_pool_rotation_to_same_address_is_noop() {
     assert_eq!(client.get_blend_pool(), Some(pool.clone()));
 
     // Rebalance should work normally (no-op rebalance to same pool)
-    client.rebalance(&agent, &symbol_short!("blend"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &500_i128, &0_i128);
 
     // Verify funds remain in the pool (no exit/re-enter occurred)
     assert_eq!(
@@ -199,7 +199,7 @@ fn test_blend_pool_rotation_back_and_forth_before_rebalance() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (contract_id, agent, owner, usdc_token, pool_a) = setup_vault_with_token_and_blend(&env);
+    let (contract_id, _agent, owner, usdc_token, pool_a) = setup_vault_with_token_and_blend(&env);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
     let pool_a_client = MockBlendPoolClient::new(&env, &pool_a);
     let token_client = TestTokenClient::new(&env, &usdc_token);
@@ -209,7 +209,7 @@ fn test_blend_pool_rotation_back_and_forth_before_rebalance() {
     let user = Address::generate(&env);
     let deposit_amount = 10_000_000_i128;
     mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
-    client.rebalance(&agent, &symbol_short!("blend"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &500_i128, &0_i128);
     assert_eq!(pool_a_client.supplied(&usdc_token), deposit_amount);
 
     // Rotate: Pool A → Pool B
@@ -222,7 +222,7 @@ fn test_blend_pool_rotation_back_and_forth_before_rebalance() {
     assert_eq!(client.get_blend_pool(), Some(pool_a));
 
     // Rebalance should still work correctly (detect funds already in pool A, no-op)
-    client.rebalance(&agent, &symbol_short!("blend"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &500_i128, &0_i128);
 
     // Verify funds remain in pool A (no unnecessary exit/re-entry)
     assert_eq!(
@@ -295,7 +295,7 @@ fn test_blend_pool_rotation_with_partial_user_withdrawal() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (contract_id, agent, owner, usdc_token, old_pool) = setup_vault_with_token_and_blend(&env);
+    let (contract_id, _agent, owner, usdc_token, old_pool) = setup_vault_with_token_and_blend(&env);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
     let old_pool_client = MockBlendPoolClient::new(&env, &old_pool);
     let token_client = TestTokenClient::new(&env, &usdc_token);
@@ -305,7 +305,7 @@ fn test_blend_pool_rotation_with_partial_user_withdrawal() {
     let user = Address::generate(&env);
     let deposit_amount = 10_000_000_i128;
     mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
-    client.rebalance(&agent, &symbol_short!("blend"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &500_i128, &0_i128);
     assert_eq!(old_pool_client.supplied(&usdc_token), deposit_amount);
 
     // User withdraws some funds (requires exit from old pool)
@@ -325,7 +325,7 @@ fn test_blend_pool_rotation_with_partial_user_withdrawal() {
 
     // Rebalance to new pool
     let new_pool_client = MockBlendPoolClient::new(&env, &new_pool);
-    client.rebalance(&agent, &symbol_short!("blend"), &500_i128, &0_i128);
+    client.rebalance(&_agent, &symbol_short!("blend"), &500_i128, &0_i128);
 
     // Verify transition happened correctly with reduced balance
     assert_eq!(

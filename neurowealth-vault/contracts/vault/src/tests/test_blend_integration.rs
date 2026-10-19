@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use super::utils::*;
-use soroban_sdk::{testutils::Events, vec, Env, IntoVal, Symbol, Val, Vec};
+use soroban_sdk::{testutils::Events, Env, Symbol};
 
 #[test]
 fn test_blend_integration_supply_via_rebalance() {
@@ -140,13 +140,10 @@ fn test_blend_integration_balance_read() {
     token_client.mint(&vault_id, &amount);
     vault_client.rebalance(&agent, &Symbol::new(&env, "blend"), &850, &0_i128);
 
-    // 2. Check balance via vault's internal get_blend_pool getter
-    // Note: The vault doesn't have a public get_blend_balance, but we can verify it indirectly
-    // or by checking the mock's balance directly as a proxy of what the vault sees.
-
-    // Let's use a manual contract call to verify the mock responds correctly to the vault's expectation
-    let args: Vec<Val> = vec![&env, usdc_token.into_val(&env), vault_id.into_val(&env)];
-    let balance: i128 = env.invoke_contract(&blend_pool, &Symbol::new(&env, "balance"), args);
+    // 2. Check balance via the shared get_reserve + get_positions helper
+    // (#986 — Blend has no plain `balance(asset, user)` function; the mock
+    // mirrors the real pool's two-call shape).
+    let balance = blend_pool_balance(&env, &blend_pool, &usdc_token, &vault_id);
 
     assert_eq!(balance, amount);
 }

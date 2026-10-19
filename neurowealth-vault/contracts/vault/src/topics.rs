@@ -104,6 +104,8 @@ pub const TOPIC_EMERGENCY_HARVEST: Symbol = symbol_short!("em_harv");
 pub const TOPIC_COMPOUND: Symbol = symbol_short!("compound");
 /// Topic 0 for `SharesMigratedEvent`; topic 1 is the migrating user's `Address`.
 pub const TOPIC_MIGRATE: Symbol = symbol_short!("migrate");
+/// Topic 0 for `MigrationReceivedEvent`; topic 1 is the migrated user's `Address`.
+pub const TOPIC_MIGRATION_RECEIVED: Symbol = symbol_short!("mig_recv");
 /// Topic for `MigrationTargetUpdatedEvent`, published when the owner sets/updates migration target.
 pub const TOPIC_MIGRATION_TARGET_UPDATED: Symbol = symbol_short!("mig_tgt");
 /// Topic for `MigrationTargetScheduledEvent`, published by `schedule_migration_target` (#969).

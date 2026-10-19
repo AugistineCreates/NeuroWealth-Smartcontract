@@ -94,7 +94,7 @@ fn test_add_supported_asset_duplicate_rejected() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #90)")]
+#[should_panic(expected = "Error(Contract, #83)")]
 fn test_deposit_asset_unsupported_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -111,7 +111,7 @@ fn test_deposit_asset_unsupported_panics() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #90)")]
+#[should_panic(expected = "Error(Contract, #83)")]
 fn test_batch_deposit_rejects_unconfigured_token() {
     let env = Env::default();
     env.mock_all_auths();
@@ -124,7 +124,7 @@ fn test_batch_deposit_rejects_unconfigured_token() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #90)")]
+#[should_panic(expected = "Error(Contract, #83)")]
 fn test_blend_supply_rejects_unconfigured_token_before_external_call() {
     let env = Env::default();
     env.mock_all_auths();
@@ -138,7 +138,7 @@ fn test_blend_supply_rejects_unconfigured_token_before_external_call() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #90)")]
+#[should_panic(expected = "Error(Contract, #83)")]
 fn test_blend_redemption_rejects_unconfigured_token_before_external_call() {
     let env = Env::default();
     env.mock_all_auths();
@@ -152,7 +152,7 @@ fn test_blend_redemption_rejects_unconfigured_token_before_external_call() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #90)")]
+#[should_panic(expected = "Error(Contract, #83)")]
 fn test_dex_supply_rejects_unconfigured_token_before_external_call() {
     let env = Env::default();
     env.mock_all_auths();
@@ -166,7 +166,7 @@ fn test_dex_supply_rejects_unconfigured_token_before_external_call() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #90)")]
+#[should_panic(expected = "Error(Contract, #83)")]
 fn test_dex_redemption_rejects_unconfigured_token_before_external_call() {
     let env = Env::default();
     env.mock_all_auths();

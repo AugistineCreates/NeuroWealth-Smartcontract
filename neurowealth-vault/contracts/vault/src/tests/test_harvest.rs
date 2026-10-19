@@ -333,7 +333,7 @@ fn test_harvest_rejects_non_agent_signer() {
         invoke: &MockAuthInvoke {
             contract: &contract_id,
             fn_name: "harvest",
-            args: (0_i128,).into_val(&env),
+            args: (agent.clone(), 0_i128).into_val(&env),
             sub_invokes: &[],
         },
     }]);

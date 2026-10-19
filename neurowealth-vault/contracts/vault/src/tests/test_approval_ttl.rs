@@ -354,7 +354,7 @@ fn test_default_approval_ttl_used_for_dex_supply() {
 #[test]
 fn test_dex_position_set_approval_ttl_rejects_below_minimum() {
     let env = Env::default();
-    let (_contract_id, agent, _usdc_token, _dex_pool, client, _token_client) =
+    let (_contract_id, _agent, _usdc_token, _dex_pool, client, _token_client) =
         setup_dex_position(&env, None);
 
     let result = client.try_set_approval_ttl(&999_u32);
@@ -367,7 +367,7 @@ fn test_dex_position_set_approval_ttl_rejects_below_minimum() {
 #[test]
 fn test_dex_position_set_approval_ttl_rejects_above_maximum() {
     let env = Env::default();
-    let (_contract_id, agent, _usdc_token, _dex_pool, client, _token_client) =
+    let (_contract_id, _agent, _usdc_token, _dex_pool, client, _token_client) =
         setup_dex_position(&env, None);
 
     let result = client.try_set_approval_ttl(&500_001_u32);

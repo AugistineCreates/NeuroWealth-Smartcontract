@@ -24,6 +24,15 @@ use soroban_sdk::{
     Address, Env, TryFromVal,
 };
 
+/// Keeps storage entries alive across the large ledger jumps these tests make.
+fn keep_storage_alive(env: &Env) {
+    env.ledger().with_mut(|li| {
+        li.min_persistent_entry_ttl = 1_000_000;
+        li.min_temp_entry_ttl = 1_000_000;
+        li.max_entry_ttl = 2_000_000;
+    });
+}
+
 /// Test that all core events have the correct topics and payload structure
 #[test]
 fn test_event_schema_core_events() {
@@ -345,6 +354,7 @@ fn test_event_schema_ownership_transfer_events() {
 fn test_event_schema_agent_update_events() {
     let env = Env::default();
     env.mock_all_auths();
+    keep_storage_alive(&env);
 
     // `TOPIC_AGENT_UPDATED` is emitted by `confirm_agent_update` once the
     // timelock elapses, not by the `update_agent` proposal step itself
@@ -362,11 +372,14 @@ fn test_event_schema_agent_update_events() {
 
     let new_agent = Address::generate(&env);
 
-    // Test agent update event
+    // update_agent only proposes (step 1 of 2, issue #317); AgentUpdatedEvent
+    // (TOPIC_AGENT_UPDATED) is only emitted by confirm_agent_update() for
+    // backward-compatible indexers, once the timelock has elapsed.
     client.update_agent(&new_agent);
     let (_, expiry) = client.get_pending_agent_update().unwrap();
     env.ledger().set_sequence_number(expiry);
     client.confirm_agent_update();
+
     let agent_events = find_events_by_topic(env.events().all(), &env, TOPIC_AGENT_UPDATED);
     assert_eq!(
         agent_events.len(),
@@ -565,6 +578,7 @@ fn test_event_schema_blend_pool_configured() {
 fn test_all_event_topics_schema_compliance() {
     let env = Env::default();
     env.mock_all_auths();
+    keep_storage_alive(&env);
 
     // `confirm_agent_update` below jumps the ledger by the agent timelock
     // duration; raise the entry-TTL ceiling first or contract instance

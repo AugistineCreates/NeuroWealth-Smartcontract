@@ -235,7 +235,6 @@ fn test_invariant_blend_integration() {
         setup_vault_with_token_and_blend(&env);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
     let token_client = TestTokenClient::new(&env, &usdc_token);
-    let blend_client = MockBlendPoolClient::new(&env, &blend_pool);
     let user = Address::generate(&env);
 
     client.set_blend_pool(&owner, &blend_pool);
@@ -255,7 +254,7 @@ fn test_invariant_blend_integration() {
 
     // Refresh vault state
     let vault_balance = token_client.balance(&contract_id);
-    let blend_balance = blend_client.balance(&usdc_token, &contract_id);
+    let blend_balance = blend_pool_balance(&env, &blend_pool, &usdc_token, &contract_id);
     let new_total = vault_balance + blend_balance;
 
     client.update_total_assets(&agent, &new_total, &false, &0);
@@ -278,7 +277,6 @@ fn test_invariant_sequential_lifecycle() {
         setup_vault_with_token_and_blend(&env);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
     let token_client = TestTokenClient::new(&env, &usdc_token);
-    let blend_client = MockBlendPoolClient::new(&env, &blend_pool);
     client.set_blend_pool(&owner, &blend_pool);
 
     let user_a = Address::generate(&env);
@@ -317,7 +315,7 @@ fn test_invariant_sequential_lifecycle() {
     token_client.mint(&blend_pool, &2_000_000); // Blend Yield
 
     let vault_balance = token_client.balance(&contract_id);
-    let blend_balance = blend_client.balance(&usdc_token, &contract_id);
+    let blend_balance = blend_pool_balance(&env, &blend_pool, &usdc_token, &contract_id);
     let new_total = vault_balance + blend_balance;
     client.update_total_assets(&agent, &new_total, &false, &0);
     assert_global_vault_invariants(&client, &users);

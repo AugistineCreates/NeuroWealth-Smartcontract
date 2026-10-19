@@ -260,8 +260,10 @@ fn test_user_withdraw_blend_low_liquidity_sufficient_idle() {
 // ============================================================================
 
 /// Switching from Blend to DEX when Blend can only release partial funds:
-/// the vault moves whatever Blend releases, then supplies that to the DEX.
-/// Total assets are preserved throughout.
+/// `rebalance` aborts the whole switch gracefully (Issue #145) rather than
+/// half-migrating — the partially withdrawn funds stay idle, the rest stays
+/// in Blend, and `CurrentProtocol` does not advance to DEX. Total assets are
+/// preserved throughout.
 #[test]
 fn test_blend_to_dex_switch_thin_blend_withdrawal() {
     let env = Env::default();
@@ -308,4 +310,26 @@ fn test_blend_to_dex_switch_thin_blend_withdrawal() {
     // The protocol must remain "blend": an incomplete exit leg aborts before
     // any DEX supply is attempted, so the vault never partially switches.
     assert_eq!(client.get_current_protocol(), symbol_short!("blend"));
+
+    // What Blend did release (20 USDC) stays idle in the vault; it is not
+    // forwarded to DEX, since the whole rebalance call returned early.
+    assert_eq!(
+        vault_usdc_balance(&env, &usdc_token, &vault_id),
+        20_000_000_i128,
+        "the partially withdrawn funds must sit idle, not be forwarded to DEX"
+    );
+
+    // The rest (40 USDC) remains deployed in Blend.
+    assert_eq!(
+        client.get_deployed_assets(),
+        40_000_000_i128,
+        "the undrained remainder must stay in Blend"
+    );
+
+    // RebalanceFailedEvent must be emitted for the aborted exit.
+    let failed_events = find_events_by_topic(env.events().all(), &env, symbol_short!("reb_fail"));
+    assert!(
+        !failed_events.is_empty(),
+        "RebalanceFailedEvent must be emitted on incomplete exit"
+    );
 }

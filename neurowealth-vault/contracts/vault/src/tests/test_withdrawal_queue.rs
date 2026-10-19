@@ -99,14 +99,18 @@ fn test_any_authenticated_keeper_can_process_bounded_queue() {
     let token = TestTokenClient::new(&env, &usdc_token);
     let user = Address::generate(&env);
     let keeper = soroban_sdk::Address::generate(&env);
-    // Must be at least DEFAULT_MIN_DEPOSIT (1_000_000) and large enough to
-    // queue 55 one-unit withdrawals below.
-    let deposit = 1_000_000_i128;
+    // 1,000 USDC (7-decimal units), not the raw 1,000 stroops this was
+    // originally coded as (`1_000_i128`): that fell below
+    // `DEFAULT_MIN_DEPOSIT` (1,000,000 stroops = 0.1 USDC) and panicked with
+    // BelowMinimumDeposit on every run. Each of the 55 queued withdrawals
+    // below is rescaled to match (1 USDC instead of 1 stroop) so the
+    // relative before/after balances the test asserts stay the same shape.
+    let deposit = 1_000_0000000_i128;
     mint_and_deposit(&env, &client, &usdc_token, &user, deposit);
     client.set_queue_config(&100u32, &3600u64);
 
     for _ in 0..55 {
-        client.queue_withdrawal(&user, &1);
+        client.queue_withdrawal(&user, &1_0000000);
     }
 
     assert_withdrawal_state(
@@ -129,11 +133,11 @@ fn test_any_authenticated_keeper_can_process_bounded_queue() {
         &client,
         &contract_id,
         &user,
-        50,
-        deposit - 50,
-        deposit - 50,
-        deposit - 50,
-        deposit - 50,
+        50_0000000,
+        950_0000000,
+        950_0000000,
+        950_0000000,
+        950_0000000,
     );
     assert_eq!(client.process_withdrawal_queue(&keeper, &u32::MAX), 5);
     assert_withdrawal_state(
@@ -141,11 +145,11 @@ fn test_any_authenticated_keeper_can_process_bounded_queue() {
         &client,
         &contract_id,
         &user,
-        55,
-        deposit - 55,
-        deposit - 55,
-        deposit - 55,
-        deposit - 55,
+        55_0000000,
+        945_0000000,
+        945_0000000,
+        945_0000000,
+        945_0000000,
     );
 }
 
@@ -267,7 +271,11 @@ fn test_cannot_queue_locked_shares() {
     let deposit_amount = 1_000_0000000i128;
     mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
 
-    // Lock half the shares so they cannot be queued for withdrawal.
+    // Lock half the shares. `lock_shares` only accepts 30/90/180-day
+    // durations (lib.rs); the originally coded `1000u32` matched none of
+    // them and panicked with InvalidLockDuration (#72) on every run — this
+    // test's actual purpose (locked shares can't be queued) doesn't depend
+    // on which of the three valid durations is used.
     client.lock_shares(&user, &(1_000_0000000i128 / 2), &30u32);
 
     // Try to queue all shares (should fail - half are locked)
@@ -276,4 +284,50 @@ fn test_cannot_queue_locked_shares() {
     // Should be able to queue only unlocked amount
     let req_id = client.queue_withdrawal(&user, &500_0000000);
     assert!(req_id > 0);
+}
+
+/// Regression test (#987): `queue_withdrawal`'s shares-needed calculation
+/// used to add an unconditional `+ 1` instead of a true ceiling division, so
+/// a user requesting their exact full balance (the single most common
+/// withdrawal request) was computed as needing one more share than they
+/// actually held, failing with `InsufficientSharesForAmount` even though the
+/// request was for no more than their own balance.
+#[test]
+fn test_queue_withdrawal_accepts_exact_full_balance() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let user = Address::generate(&env);
+    mint_and_deposit(&env, &client, &usdc_token, &user, 2_768_000_000_i128);
+
+    let full_balance = client.get_balance(&user);
+    assert_eq!(full_balance, 2_768_000_000_i128);
+
+    // Must not panic: requesting the exact full balance is always valid.
+    let req_id = client.queue_withdrawal(&user, &full_balance);
+    let req = client.get_withdrawal_request(&req_id);
+    assert_eq!(req.amount, full_balance);
+}
+
+/// Regression test (#987): same scenario as above, but with a second user
+/// present so the share/asset ratio isn't trivially 1:1, closer to how the
+/// fuzz harness found the bug.
+#[test]
+fn test_queue_withdrawal_accepts_exact_full_balance_with_multiple_holders() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let user_a = Address::generate(&env);
+    let user_b = Address::generate(&env);
+    mint_and_deposit(&env, &client, &usdc_token, &user_a, 1_000_0000000);
+    mint_and_deposit(&env, &client, &usdc_token, &user_b, 2_768_000_000_i128);
+
+    let full_balance_b = client.get_balance(&user_b);
+    let req_id = client.queue_withdrawal(&user_b, &full_balance_b);
+    let req = client.get_withdrawal_request(&req_id);
+    assert_eq!(req.amount, full_balance_b);
 }

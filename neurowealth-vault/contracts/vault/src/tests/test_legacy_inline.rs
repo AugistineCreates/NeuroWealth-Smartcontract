@@ -4,6 +4,15 @@ use soroban_sdk::{
     Address, BytesN, Env,
 };
 
+/// Keeps storage entries alive across the large ledger jumps these tests make.
+fn keep_storage_alive(env: &Env) {
+    env.ledger().with_mut(|li| {
+        li.min_persistent_entry_ttl = 1_000_000;
+        li.min_temp_entry_ttl = 1_000_000;
+        li.max_entry_ttl = 2_000_000;
+    });
+}
+
 fn setup_vault(env: &Env) -> (Address, Address, Address, Address) {
     let deployer = Address::generate(env);
     let salt = BytesN::from_array(env, &[0u8; 32]);
@@ -131,6 +140,7 @@ fn test_set_user_deposit_cap() {
 fn test_update_agent() {
     let env = Env::default();
     env.mock_all_auths();
+    keep_storage_alive(&env);
 
     // The 24-hour agent timelock jump below would otherwise archive contract
     // instance storage under the host's default entry-TTL ceiling (mirrors
@@ -148,6 +158,11 @@ fn test_update_agent() {
     // timelock elapses and `confirm_agent_update` is called (#317).
     let new_agent = Address::generate(&env);
     client.update_agent(&new_agent);
+    assert_eq!(
+        client.get_agent(),
+        old_agent,
+        "agent must not change until confirmed"
+    );
     let (_, expiry) = client.get_pending_agent_update().unwrap();
     env.ledger().set_sequence_number(expiry);
     client.confirm_agent_update();

@@ -174,7 +174,8 @@ fn test_tvl_cap_one_stroop_over_headroom_rejected() {
             after ~50+ prior successful contract operations in one Env can itself panic \
             inside Env::drop's to_ledger_snapshot() during process cleanup, aborting the \
             whole test binary (SIGABRT) rather than failing just this test. Confirmed via \
-            isolated reproduction (this test alone still aborts the process)."]
+            an isolated probe (50 plain deposits, zero catch_unwind) that passed cleanly, \
+            isolating catch_unwind-after-scale as the trigger, not scale alone."]
 fn test_tvl_cap_rapid_many_users() {
     let env = Env::default();
     env.mock_all_auths();

@@ -29,6 +29,15 @@ use soroban_sdk::{
     symbol_short, testutils::Address as _, testutils::Ledger, Address, Env, TryFromVal,
 };
 
+/// Keeps storage entries alive across the large ledger jumps these tests make.
+fn keep_storage_alive(env: &Env) {
+    env.ledger().with_mut(|li| {
+        li.min_persistent_entry_ttl = 1_000_000;
+        li.min_temp_entry_ttl = 1_000_000;
+        li.max_entry_ttl = 2_000_000;
+    });
+}
+
 // ── snapshot macro ────────────────────────────────────────────────────────────
 
 /// Asserts a single event field matches its expected snapshot value.
@@ -460,6 +469,7 @@ fn snapshot_deposit_limits_updated_event_all_fields() {
 fn snapshot_agent_updated_event_all_fields() {
     let env = Env::default();
     env.mock_all_auths();
+    keep_storage_alive(&env);
 
     // `TOPIC_AGENT_UPDATED` is the backward-compatible event emitted by
     // `confirm_agent_update` once the timelock elapses, not by the
@@ -477,6 +487,10 @@ fn snapshot_agent_updated_event_all_fields() {
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
     let new_agent = Address::generate(&env);
     client.update_agent(&new_agent);
+
+    // update_agent only proposes (step 1 of 2, issue #317); AgentUpdatedEvent
+    // (TOPIC_AGENT_UPDATED) is only emitted by confirm_agent_update() for
+    // backward-compatible indexers, once the timelock has elapsed.
     let (_, expiry) = client.get_pending_agent_update().unwrap();
     env.ledger().set_sequence_number(expiry);
     client.confirm_agent_update();

@@ -2,6 +2,7 @@ mod test_access_control;
 mod test_adversarial_agent_simulation;
 mod test_agent_compromise_scenarios;
 mod test_agent_timelock;
+mod test_allowance_hygiene;
 mod test_approval_ttl;
 mod test_approval_ttl_schedule;
 mod test_asset_breakdown;
@@ -38,7 +39,6 @@ mod test_initialize;
 mod test_legacy_inline;
 mod test_limits;
 mod test_math_limits;
-mod test_migration;
 mod test_multi_asset;
 mod test_multi_protocol;
 mod test_multi_user_concurrent;
@@ -53,6 +53,7 @@ mod test_rebalance_cooldown;
 mod test_rebalance_integration;
 // Pre-existing compile failures (MockTokenDataKey not #[contracttype], no std).
 // mod test_reentrancy_defense;
+mod test_migration;
 mod test_migration_timelock;
 mod test_require_initialized;
 mod test_rotation_accounting_invariants;
@@ -86,16 +87,22 @@ mod utils;
 mod test_batch_deposit;
 mod test_liquidity_mining_rewards;
 mod test_performance_fee;
-// Pre-existing compile failures — WIP modules committed with broken imports
-// (`crate::tests::` paths that can never resolve: lib.rs mounts this file as
-// `comprehensive_tests`), missing aux modules (`../insurance.rs`),
-// ANSI-escape-corrupted attributes, and rejected API references
-// (`BatchDepositItem`, `BelowMinimumWithdrawal`). Not harvested for coverage.
-// (test_batch_deposit, test_user_apy, and test_withdrawal_queue were fixed
-// and re-registered above/below; only these two remain unfixed.)
-// mod test_insurance_fund;
-// mod test_min_withdraw;
-// mod test_min_withdrawal;
+// `test_insurance_fund` and `test_withdrawal_queue` were fixed during the
+// #985-988 batch's unrelated compile-break cleanup: wrong `crate::tests::`
+// paths (lib.rs mounts this directory as `comprehensive_tests`, not `tests`),
+// ANSI-escape-corrupted and `#`-less `#[test]` attributes, bare `assert_eq(`
+// calls, and a stale `setup_vault()` call shape rewritten against the real
+// fixture API in `utils.rs`. Both now test real, existing entry points.
+// `test_user_apy` likewise calls the real, existing `get_user_apy` entry
+// point and is registered below.
+mod test_insurance_fund;
 mod test_pause_queue_breaker_matrix_proptest;
 mod test_user_apy;
 mod test_withdrawal_queue;
+
+// `test_min_withdraw`/`test_min_withdrawal` stay disabled: they call
+// `set_min_withdrawal`/`get_min_withdrawal`/`VaultError::BelowMinimumWithdrawal`,
+// none of which exist anywhere in the contract. Orphaned tests for a feature
+// that was never implemented, not harvested for coverage.
+// mod test_min_withdraw;
+// mod test_min_withdrawal;

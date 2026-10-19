@@ -13,6 +13,7 @@ extern crate std;
 
 use super::utils::*;
 use soroban_sdk::{testutils::Address as _, Address, Env};
+use std::vec::Vec;
 
 /// Resets the env budget to zero, runs `f`, and returns (cpu, mem).
 fn measure<F: FnOnce()>(env: &Env, f: F) -> (u64, u64) {

@@ -156,8 +156,15 @@ fn setup_matrix_fixture(
     client.set_caps(&MAX_DEPOSIT_CEILING, &(MAX_DEPOSIT_CEILING * 2));
 
     let user = Address::generate(&env);
-    // User deposits 100,000 USDC (7 decimals) to have sufficient shares for queue operations
-    mint_and_deposit(&env, &client, &usdc_token, &user, 10_000_0000000i128);
+    // User deposits 999 USDC (7 decimals) to have sufficient shares for queue
+    // operations. Capped just under `DEFAULT_MAX_DEPOSIT` (1,000 USDC):
+    // the originally coded 10,000 USDC deposit exceeded the per-transaction
+    // cap by 10x and panicked with MaximumDepositExceeded (#39) on every
+    // test using this fixture. 999 USDC still comfortably covers the
+    // queue's largest pre-seeded totals (up to 300 USDC across
+    // PartiallyFilled/AtCapacity) plus the proptests' widest `test_amount`
+    // range (up to 500 USDC).
+    mint_and_deposit(&env, &client, &usdc_token, &user, 999_0000000i128);
 
     // 1. Establish Queue State
     let mut queued_ids = std::vec::Vec::new();
@@ -276,6 +283,15 @@ fn verify_matrix_cell_invariants(
     let initial_failures = fix.client.get_consecutive_failures();
     let initial_paused = fix.client.is_paused();
 
+    // Requests to exercise in Invariant 2 (cancellation): the fixture's
+    // pre-seeded ids, plus whatever Invariant 1 creates below for queue
+    // states (e.g. Empty) that have room. Without tracking that new id here
+    // too, it would stay queued, un-cancelled, past Invariant 2, and then
+    // Invariant 3's `process_withdrawal_queue` would fulfill it — breaking
+    // the `Unconfigured | Empty => processed == 0` expectation even though
+    // nothing is actually wrong with the contract's behavior.
+    let mut ids_to_cancel: std::vec::Vec<u32> = fix.queued_ids.clone();
+
     // ------------------------------------------------------------------------
     // Invariant 1: queue_withdrawal behavior
     // ------------------------------------------------------------------------
@@ -307,6 +323,7 @@ fn verify_matrix_cell_invariants(
             assert_eq!(req.amount, test_amount);
             assert!(!req.fulfilled);
             assert!(!req.cancelled);
+            ids_to_cancel.push(req_id);
         }
     }
 
@@ -317,7 +334,7 @@ fn verify_matrix_cell_invariants(
     // ------------------------------------------------------------------------
     // Invariant 2: Emergency Exit Escape Hatch (cancel_withdrawal_request)
     // ------------------------------------------------------------------------
-    if let Some(&req_id) = fix.queued_ids.first() {
+    if let Some(&req_id) = ids_to_cancel.first() {
         // 2a. Unauthorized user cancellation must fail across ALL 45 states
         let unauthorized_caller = Address::generate(&fix.env);
         let unauth_cancel = fix
@@ -360,57 +377,37 @@ fn verify_matrix_cell_invariants(
     );
     let processed = proc_res.unwrap().unwrap();
 
-    match queue_state {
-        QueueState::Unconfigured | QueueState::Empty => {
-            // `max_size == 0` ("Unconfigured") means unlimited capacity, not
-            // disabled (see `set_queue_config`'s doc comment), so unless the
-            // vault was effectively paused, Invariant 1 above successfully
-            // queued `test_amount` and it was never cancelled (unlike
-            // `PartiallyFilled`/`AtCapacity`, these states start with no
-            // `queued_ids`), so it remains to be fulfilled here.
-            let expected = if fix.is_effectively_paused { 0 } else { 1 };
-            assert_eq!(
-                processed, expected,
-                "queue started with no pre-existing requests; only the one \
-                 queued in Invariant 1 (if it was allowed to queue) should \
-                 be processed"
-            );
-        }
-        QueueState::ExpiredRequests => {
-            // The one pre-existing (expired) request was already cancelled
-            // in Invariant 2 above (it was `queued_ids.first()`), so by the
-            // time we reach this point it no longer participates in pruning
-            // vs. fulfillment here. Unless effectively paused, Invariant 1
-            // separately queued a fresh (non-expired) `test_amount` request,
-            // which is fulfilled normally.
-            let expected = if fix.is_effectively_paused { 0 } else { 1 };
-            assert_eq!(
-                expected, processed,
-                "the expired request was already cancelled in Invariant 2; \
-                 only Invariant 1's fresh request (if queuing was allowed) \
-                 remains to be processed"
-            );
-        }
-        QueueState::AtCapacity => {
-            // The queue was already full, so Invariant 1's extra
-            // `test_amount` queue attempt was rejected regardless of pause
-            // state. Out of the 2 initial requests, 1 was cancelled above,
-            // leaving exactly 1 remaining valid request to fulfill.
-            assert_eq!(processed, 1, "remaining valid request must be fulfilled");
-        }
-        QueueState::PartiallyFilled => {
-            // Out of the 2 initial requests, 1 was cancelled above, leaving
-            // 1 remaining valid request. Unless effectively paused,
-            // Invariant 1 also successfully queued an extra `test_amount`
-            // request (capacity 10 is never reached here), which is never
-            // cancelled, so it is fulfilled alongside the original one.
-            let expected = if fix.is_effectively_paused { 1 } else { 2 };
-            assert_eq!(
-                processed, expected,
-                "remaining valid request(s) must be fulfilled"
-            );
-        }
-    }
+    // `ids_to_cancel` holds every request that existed right after Invariant 1:
+    // the fixture's pre-seeded ones, plus one more if Invariant 1 itself just
+    // queued a fresh request (any state except AtCapacity, when unpaused).
+    // Invariant 2 above unconditionally cancels its first entry whenever the
+    // list is non-empty (the request owner can "ALWAYS cancel", regardless of
+    // pause state) — and for `ExpiredRequests` that first entry is always the
+    // pre-seeded expired one, so cancellation (not natural TTL pruning) is
+    // what actually removes it here. Every other tracked request is a fresh,
+    // unexpired one from Invariant 1, so it survives to be fulfilled.
+    //
+    // This is therefore the same formula across every (queue_state, pause)
+    // combination: whatever remains after cancelling at most one entry is
+    // exactly what `process_withdrawal_queue` fulfills. A per-queue_state
+    // hardcoded constant can't express this: e.g. `PartiallyFilled` fulfills
+    // 1 remaining request when the vault was paused during Invariant 1 (no
+    // new request added) but 2 when it was unpaused (one was), and
+    // `ExpiredRequests` fulfills 0 when paused but 1 when unpaused, for the
+    // same reason.
+    let expected_processed = ids_to_cancel.len().saturating_sub(1) as u32;
+    assert_eq!(
+        processed,
+        expected_processed,
+        "process_withdrawal_queue must fulfill exactly the requests left after \
+         Invariant 2's cancellation (pause={:?}, breaker={:?}, queue={:?}, \
+         tracked_requests={}, effectively_paused={})",
+        pause_state,
+        breaker_state,
+        queue_state,
+        ids_to_cancel.len(),
+        fix.is_effectively_paused
+    );
 
     // State isolation: queue processing must not alter breaker failures or pause flag
     assert_eq!(fix.client.get_consecutive_failures(), initial_failures);
@@ -419,10 +416,13 @@ fn verify_matrix_cell_invariants(
     // ------------------------------------------------------------------------
     // Invariant 4: Eligibility Query Consistency (get_withdrawal_eligibility)
     // ------------------------------------------------------------------------
-    // `get_withdrawal_eligibility` checks the pause flag before checking the
-    // user's share balance, so a deposit is only needed (and only possible —
-    // `deposit` itself panics with Paused while the vault is paused) to
-    // exercise the "eligible" branch.
+    // `deposit` (and thus `mint_and_deposit`) unconditionally requires the
+    // vault to be unpaused, so it cannot run while effectively paused — doing
+    // so anyway panicked this whole test on every paused matrix cell. The
+    // eligibility check itself doesn't need the fresh user to hold shares:
+    // `get_withdrawal_eligibility` returns early on the pause check before it
+    // ever looks at the caller's share balance (lib.rs), so the paused-branch
+    // assertions below hold with or without a deposit.
     let fresh_user = Address::generate(&fix.env);
     if !fix.is_effectively_paused {
         mint_and_deposit(
@@ -717,14 +717,12 @@ fn test_tripped_circuit_breaker_blocks_withdrawal_queue_until_reset() {
     client.set_max_consecutive_failures(&2);
     client.set_queue_config(&10u32, &3600u64);
 
-    // Raise the per-tx, per-user, and vault-wide deposit caps above the
-    // 50,000 USDC deposit below — the contract defaults (1,000 USDC per-tx,
-    // 1,000 USDC per-user, 10,000 USDC TVL) would otherwise reject it.
-    client.set_deposit_limits(&DEFAULT_MIN_DEPOSIT, &MAX_DEPOSIT_CEILING);
-    client.set_caps(&MAX_DEPOSIT_CEILING, &MAX_DEPOSIT_CEILING);
-
     let user = Address::generate(&env);
-    mint_and_deposit(&env, &client, &usdc_token, &user, 5_000_0000000i128);
+    // 900 USDC, under `DEFAULT_MAX_DEPOSIT` (1,000 USDC/tx) — the original
+    // 5,000 USDC deposit exceeded it 5x and panicked with
+    // MaximumDepositExceeded. 900 USDC comfortably covers this test's three
+    // 100 USDC queued requests.
+    mint_and_deposit(&env, &client, &usdc_token, &user, 900_0000000i128);
 
     // Initial state: unpaused, 0 failures -> queue succeeds
     assert_eq!(client.get_consecutive_failures(), 0);
@@ -786,14 +784,10 @@ fn test_emergency_cancellation_unblocked_in_all_emergency_and_tripped_states() {
     client.set_max_consecutive_failures(&1);
     client.set_queue_config(&10u32, &3600u64);
 
-    // Raise the per-tx, per-user, and vault-wide deposit caps above the
-    // 50,000 USDC deposit below — the contract defaults (1,000 USDC per-tx,
-    // 1,000 USDC per-user, 10,000 USDC TVL) would otherwise reject it.
-    client.set_deposit_limits(&DEFAULT_MIN_DEPOSIT, &MAX_DEPOSIT_CEILING);
-    client.set_caps(&MAX_DEPOSIT_CEILING, &MAX_DEPOSIT_CEILING);
-
     let user = Address::generate(&env);
-    mint_and_deposit(&env, &client, &usdc_token, &user, 5_000_0000000i128);
+    // 900 USDC, under `DEFAULT_MAX_DEPOSIT` (1,000 USDC/tx) — see the sibling
+    // fixes above in this file for why 5,000 USDC panicked.
+    mint_and_deposit(&env, &client, &usdc_token, &user, 900_0000000i128);
 
     // Queue 3 requests
     let r1 = client.queue_withdrawal(&user, &100_0000000i128);
@@ -838,14 +832,10 @@ fn test_queue_processing_and_expiration_during_pause_and_breaker_tripped() {
     client.set_max_consecutive_failures(&1);
     client.set_queue_config(&10u32, &60u64);
 
-    // Raise the per-tx, per-user, and vault-wide deposit caps above the
-    // 50,000 USDC deposit below — the contract defaults (1,000 USDC per-tx,
-    // 1,000 USDC per-user, 10,000 USDC TVL) would otherwise reject it.
-    client.set_deposit_limits(&DEFAULT_MIN_DEPOSIT, &MAX_DEPOSIT_CEILING);
-    client.set_caps(&MAX_DEPOSIT_CEILING, &MAX_DEPOSIT_CEILING);
-
     let user = Address::generate(&env);
-    mint_and_deposit(&env, &client, &usdc_token, &user, 5_000_0000000i128);
+    // 900 USDC, under `DEFAULT_MAX_DEPOSIT` (1,000 USDC/tx) — see the sibling
+    // fixes above in this file for why 5,000 USDC panicked.
+    mint_and_deposit(&env, &client, &usdc_token, &user, 900_0000000i128);
 
     let r1 = client.queue_withdrawal(&user, &100_0000000i128);
 

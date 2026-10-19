@@ -129,7 +129,12 @@ fn test_owner_can_update_agent() {
         "active agent must not change until the timelock is confirmed"
     );
 
-    let (_, expiry) = client.get_pending_agent_update().unwrap();
+    let (pending_addr, expiry) = client
+        .get_pending_agent_update()
+        .expect("pending agent update should be recorded");
+    assert_eq!(pending_addr, new_agent);
+
+    // Advance past the timelock and confirm.
     env.ledger().set_sequence_number(expiry);
     client.confirm_agent_update();
 

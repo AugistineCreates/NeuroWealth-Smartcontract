@@ -119,10 +119,13 @@ fn test_schedule_zero_hash_rejected() {
 
     let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
     let result = client.try_schedule_upgrade(&owner, &zero_hash);
+    // `schedule_upgrade` (lib.rs) rejects a zero wasm hash by reusing
+    // `VaultError::InvalidStrategy` (#47) — there is no dedicated
+    // `InvalidWasmHash` variant in the (50-variant-capped) error enum.
     assert_eq!(
         result,
         Err(Ok(soroban_sdk::Error::from_contract_error(47))),
-        "zero wasm hash should be rejected with VaultError::InvalidWasmHash"
+        "zero wasm hash should be rejected with VaultError::InvalidStrategy (#47)"
     );
 
     assert!(

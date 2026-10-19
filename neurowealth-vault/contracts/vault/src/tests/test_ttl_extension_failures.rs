@@ -60,6 +60,15 @@ fn expire_shares_entry(env: &Env, contract_id: &Address, user: &Address) {
     });
 }
 
+/// Keeps storage entries alive across the large ledger jumps these tests make.
+fn keep_storage_alive(env: &Env) {
+    env.ledger().with_mut(|li| {
+        li.min_persistent_entry_ttl = 1_000_000;
+        li.min_temp_entry_ttl = 1_000_000;
+        li.max_entry_ttl = 2_000_000;
+    });
+}
+
 // ============================================================================
 // Funded extension
 // ============================================================================
@@ -340,6 +349,7 @@ fn test_recovery_after_lapse_is_a_normal_deposit() {
 fn test_protocol_approval_is_live_until_and_including_the_expiry_ledger() {
     let env = Env::default();
     env.mock_all_auths();
+    keep_storage_alive(&env);
 
     // This test jumps the ledger sequence forward by tens of thousands of
     // ledgers; without raising the entry-TTL ceiling, contract instance
@@ -393,6 +403,7 @@ fn test_protocol_approval_is_live_until_and_including_the_expiry_ledger() {
 fn test_protocol_approval_state_is_consistent_after_failed_maintenance() {
     let env = Env::default();
     env.mock_all_auths();
+    keep_storage_alive(&env);
 
     // See the comment in
     // `test_protocol_approval_is_live_until_and_including_the_expiry_ledger`.
