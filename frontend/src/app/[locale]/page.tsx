@@ -24,6 +24,7 @@ import {
 
 export default function DashboardPage() {
   const t = useTranslations('Index');
+  const tModal = useTranslations('ActionModal');
   const [publicKey, setPublicKey] = useState<string | null>(null);
   const [vaultState, setVaultState] = useState<VaultState>({
     balance: 0,
@@ -79,7 +80,7 @@ export default function DashboardPage() {
     } catch (err) {
       if (signal?.aborted) return;
       console.error('Failed to load dashboard data:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load dashboard data. Please try again.');
+      setError(err instanceof Error ? err.message : t('vaultBalancesError'));
     } finally {
       if (!signal?.aborted) {
         setLoading(false);
@@ -148,7 +149,7 @@ export default function DashboardPage() {
                 className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/30 transition-colors"
               >
                 <RefreshCw size={12} />
-                Retry
+                {t('retry')}
               </button>
             </div>
           )}
@@ -163,7 +164,7 @@ export default function DashboardPage() {
                 </>
               ) : error && publicKey ? (
                 <div role="status" className="md:col-span-3 glass-panel rounded-2xl p-6 text-sm text-slate-300">
-                  Vault balances could not be loaded.
+                  {t('vaultBalancesError')}
                 </div>
               ) : (
                 <>
@@ -219,17 +220,17 @@ export default function DashboardPage() {
               <div>
                 <div className="flex items-center justify-between mb-4">
                   <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                    <MessageSquare size={14} className="text-emerald-400" /> WhatsApp Integration
+                    <MessageSquare size={14} className="text-emerald-400" /> {t('whatsappIntegration')}
                   </span>
                   <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                    Live Bot
+                    {t('liveBot')}
                   </span>
                 </div>
                 <h3 className="text-lg font-bold text-white mb-2">
-                  Interact via WhatsApp Chat
+                  {t('interactViaWhatsApp')}
                 </h3>
                 <p className="text-xs text-slate-300 leading-relaxed mb-4">
-                  No browser or wallet needed! Simply text our Twilio bot to verify with OTP, check balance, deposit, or withdraw on the go.
+                  {t('whatsappDescription')}
                 </p>
                 <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 font-mono text-xs text-emerald-400 space-y-1 mb-4">
                   <div>User: deposit 100 USDC</div>
@@ -237,7 +238,7 @@ export default function DashboardPage() {
                 </div>
               </div>
               <div className="pt-4 border-t border-slate-800">
-                <span className="text-xs text-slate-400 block mb-2">Webhook URL:</span>
+                <span className="text-xs text-slate-400 block mb-2">{t('webhookUrl')}</span>
                 <code className="text-[11px] bg-slate-900 px-2 py-1 rounded border border-slate-800 text-slate-300 block truncate">
                   /api/whatsapp/webhook
                 </code>
@@ -261,12 +262,12 @@ export default function DashboardPage() {
           <div className="flex items-center gap-2">
             <Bot size={16} className="text-emerald-400" />
             <span className="font-semibold text-slate-300">NeuroWealth AI Vault</span>
-            <span>— Soroban Smart Contract Architecture</span>
+            <span>— {t('footerText')}</span>
           </div>
           <div className="flex items-center gap-6">
-            <a href="https://stellar.org" target="_blank" rel="noreferrer" className="hover:text-emerald-400 transition-colors">Stellar Network</a>
-            <a href="https://soroban.stellar.org" target="_blank" rel="noreferrer" className="hover:text-emerald-400 transition-colors">Soroban SDK</a>
-            <a href="https://freighter.app" target="_blank" rel="noreferrer" className="hover:text-emerald-400 transition-colors">Freighter Wallet</a>
+            <a href="https://stellar.org" target="_blank" rel="noreferrer" className="hover:text-emerald-400 transition-colors">{t('stellarNetwork')}</a>
+            <a href="https://soroban.stellar.org" target="_blank" rel="noreferrer" className="hover:text-emerald-400 transition-colors">{t('sorobanSdk')}</a>
+            <a href="https://freighter.app" target="_blank" rel="noreferrer" className="hover:text-emerald-400 transition-colors">{t('freighterWallet')}</a>
           </div>
         </div>
       </footer>
