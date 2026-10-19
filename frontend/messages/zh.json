@@ -65,6 +65,7 @@
     "wrongNetwork": "网络错误。将Freighter切换到所需的Stellar网络，然后重试。",
     "walletDisconnected": "钱包未连接。重新连接Freighter并授予此应用程序访问权限，然后重试。",
     "submissionFailed": "交易失败。请重试。",
-    "transactionFailed": "交易失败。请重试。"
+    "transactionFailed": "交易失败。请重试。",
+    "checkStatusLater": "稍后查看状态"
   }
 }
