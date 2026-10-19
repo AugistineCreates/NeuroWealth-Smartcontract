@@ -255,6 +255,57 @@ idle and are not supplied to or redeemed from the USDC-only Blend/DEX
 integrations. Protocol clients independently enforce the configured token
 before querying token balances or calling a pool.
 
+### 8. Yield Sniping Protection (Issue #975)
+
+**Threat**: Yield reaches the share price only when the agent calls `update_total_assets`,
+which can raise `TotalAssets` by any amount up to the real balance in one step.
+With `MinHoldingPeriod` defaulting to 0, anyone watching the mempool or the agent's
+schedule could deposit just before the update and withdraw right after, capturing
+yield accrued over a period they were not invested.
+
+**Mitigation**: The vault now initializes with a non-zero default `MinHoldingPeriod`
+of 120 ledgers (~10 minutes). This prevents same-block deposit/withdraw cycles
+that would allow yield sniping. The owner can adjust this period via `set_min_holding_period`
+if needed for operational reasons, but the default provides baseline protection.
+
+**Impact**: Attackers attempting to snipe yield must now wait at least 120 ledgers
+between deposit and withdrawal, making the attack unprofitable for typical yield
+reporting intervals.
+
+### 9. Decrease Cap Configuration (Issue #974)
+
+**Threat**: `update_total_assets(agent, new_total, allow_decrease, max_decrease_bps)`
+capped a loss report at `max(max_decrease_bps, 100)` bps of the old total. The cap
+was a caller-supplied argument, so the caller could pass `10_000` and report a 100%
+loss in one call. The only safeguard was the owner co-sign requirement.
+
+**Mitigation**: The decrease cap is now stored in owner-configured storage
+(`DataKey::MaxDecreaseBps`) with a sane default of 1000 bps (10%) and a hard
+ceiling of 10_000 bps (100%). The caller-supplied argument in `update_total_assets`
+is ignored. The owner can configure the cap via `set_max_decrease_bps`, but cannot
+exceed the hard ceiling.
+
+**Impact**: Even with owner co-sign, a single transaction cannot report a loss
+exceeding the configured cap (default 10%). Repeated calls cannot chain past the
+limit without additional owner authorization for each call.
+
+### 10. Zero-Assets-With-Shares Protection (Issue #973)
+
+**Threat**: `convert_to_shares_internal` used a bootstrap 1:1 rate when
+`total_shares == 0 || total_assets == 0`. If shares were outstanding but assets
+were zero (e.g., after a full loss report, or dust shares remaining after rounding),
+a new depositor would get `amount` shares while existing holders, whose shares were
+worth nothing, would immediately own a pro-rata slice of the new deposit.
+
+**Mitigation**: When `total_shares > 0 && total_assets == 0`, deposits are rejected
+with the typed error `VaultError::DepositRejectedZeroAssetsWithShares`. This prevents
+the dilution attack. The vault must be in a recovery mode (owner intervention) to
+accept new deposits in this state.
+
+**Impact**: New depositors cannot be diluted by existing worthless shares. The vault
+requires explicit recovery action (e.g., owner-initiated loss write-down or share
+restructuring) before accepting new deposits after a total loss event.
+
 ## Centralization-Risk Register
 
 This register documents every owner-only and agent-only capability, the blast radius if the corresponding key is compromised, and the existing mitigation status.
