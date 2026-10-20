@@ -9,7 +9,7 @@ use soroban_sdk::{testutils::Address as _, Address, Env};
 
 /// Deposits are rejected when total_shares > 0 but total_assets == 0.
 #[test]
-#[should_panic(expected = "Error(Contract, #86)")]
+#[should_panic(expected = "Error(Contract, #93)")]
 fn test_deposit_rejected_when_shares_exist_but_assets_zero() {
     let env = Env::default();
     env.mock_all_auths();
@@ -89,7 +89,7 @@ fn test_deposit_succeeds_when_both_shares_and_assets_positive() {
 
 /// batch_deposit is also rejected when total_shares > 0 but total_assets == 0.
 #[test]
-#[should_panic(expected = "Error(Contract, #86)")]
+#[should_panic(expected = "Error(Contract, #93)")]
 fn test_batch_deposit_rejected_when_shares_exist_but_assets_zero() {
     let env = Env::default();
     env.mock_all_auths();
@@ -114,6 +114,6 @@ fn test_batch_deposit_rejected_when_shares_exist_but_assets_zero() {
     token.mint(&user2, &deposit2);
 
     let mut entries = soroban_sdk::Vec::new(&env);
-    entries.push((usdc_token, deposit2));
+    entries.push_back((usdc_token, deposit2));
     client.batch_deposit(&user2, &entries);
 }

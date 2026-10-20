@@ -345,6 +345,11 @@ pub enum VaultError {
     /// variants this call site used interchangeably before) describes this
     /// case; both are unrelated error conditions reused by mistake.
     StandbyMatchesPrimaryAgent = 92,
+    /// The bootstrap 1:1 asset-to-share conversion was about to mint shares
+    /// while existing shares are outstanding but the vault reports zero
+    /// assets (#973). Minting here would value those existing holders'
+    /// shares at zero, so the deposit is rejected instead.
+    DepositRejectedZeroAssetsWithShares = 93,
 }
 
 impl VaultError {
@@ -2788,7 +2793,9 @@ impl NeuroWealthVault {
         );
         // Set default MinHoldingPeriod to prevent yield sniping (#975)
         // 120 ledgers (~10 minutes) prevents same-block deposit/withdraw cycles
-        env.storage().instance().set(&DataKey::MinHoldingPeriod, &120_u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::MinHoldingPeriod, &120_u32);
         Self::initialize_rate_limit_defaults(&env);
         env.storage().instance().set(&DataKey::Version, &1_u32);
 
@@ -8133,7 +8140,7 @@ impl NeuroWealthVault {
     /// on full withdrawal). For n >> 500, consider a secondary hash-based
     /// removal index in a future optimization.
     fn prune_user_from_index(env: &Env, user: &Address) {
-        let mut index: Vec<Address> = env
+        let index: Vec<Address> = env
             .storage()
             .instance()
             .get(&DataKey::UserSharesIndex)
@@ -10072,7 +10079,7 @@ impl NeuroWealthVault {
     /// Removes an asset symbol from the supported-assets index (#646).
     #[inline]
     fn remove_from_supported_assets_index(env: &Env, asset: &Symbol) {
-        let mut index = Self::read_supported_assets(env);
+        let index = Self::read_supported_assets(env);
         let mut kept = Vec::new(env);
         for a in index.iter() {
             if &a != asset {
