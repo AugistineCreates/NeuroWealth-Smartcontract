@@ -82,6 +82,9 @@ mod test_user_strategy;
 mod test_users_with_shares;
 mod test_withdraw;
 mod test_yield;
+mod test_zero_assets_with_shares;
+mod test_stored_decrease_cap;
+mod test_default_holding_period;
 mod utils;
 
 mod test_batch_deposit;

@@ -569,6 +569,10 @@ pub enum DataKey {
     /// Written on every successful `deposit`. Used together with
     /// `MinHoldingPeriod` to enforce the flash-loan protection window.
     LastDepositLedger(Address),
+    /// Maximum allowed decrease in basis points for `update_total_assets` (#974).
+    /// Configured by the owner. Defaults to 1000 bps (10%) with a hard ceiling of 10_000 bps (100%).
+    /// The caller-supplied argument in `update_total_assets` is ignored after this fix.
+    MaxDecreaseBps,
 
     /// Owner-configured call allowance and ledger window for a rate-limit category.
     /// Appended to preserve the serialized discriminants of existing keys.
@@ -2782,6 +2786,9 @@ impl NeuroWealthVault {
             &DataKey::CircuitBreakerState,
             &(DEFAULT_MAX_CONSECUTIVE_FAILURES, 0_u32),
         );
+        // Set default MinHoldingPeriod to prevent yield sniping (#975)
+        // 120 ledgers (~10 minutes) prevents same-block deposit/withdraw cycles
+        env.storage().instance().set(&DataKey::MinHoldingPeriod, &120_u32);
         Self::initialize_rate_limit_defaults(&env);
         env.storage().instance().set(&DataKey::Version, &1_u32);
 
@@ -6111,6 +6118,41 @@ impl NeuroWealthVault {
             .unwrap_or(0)
     }
 
+    /// Sets the maximum allowed decrease in basis points for `update_total_assets` (#974).
+    ///
+    /// The owner can configure this cap to limit how much the agent can report as a loss
+    /// in a single call. This prevents a compromised agent from reporting a massive loss
+    /// (e.g., 100%) in one transaction.
+    ///
+    /// # Arguments
+    ///
+    /// * `bps` - Maximum decrease in basis points (100 = 1%, 1000 = 10%, 10_000 = 100%).
+    ///           Values above 10_000 are clamped to 10_000 (hard ceiling).
+    ///
+    /// # Panics
+    ///
+    /// - [`VaultError::CallerIsNotOwner`] if caller is not the owner.
+    pub fn set_max_decrease_bps(env: Env, bps: u32) {
+        Self::require_initialized(&env);
+        Self::require_is_owner(&env);
+
+        // Hard ceiling of 10_000 bps (100%) to prevent disabling the cap entirely
+        let capped_bps = bps.min(10_000);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxDecreaseBps, &capped_bps);
+    }
+
+    /// Returns the configured maximum decrease in basis points, or `1000` (10%) if
+    /// not explicitly set (#974).
+    pub fn get_max_decrease_bps(env: Env) -> u32 {
+        Self::require_initialized(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::MaxDecreaseBps)
+            .unwrap_or(1000) // Default to 10% decrease cap
+    }
+
     /// Records a suspected MEV extraction event after a rebalance (#658).
     ///
     /// Called by the off-chain agent when post-execution analysis suggests a
@@ -7676,7 +7718,7 @@ impl NeuroWealthVault {
         agent: Address,
         new_total: i128,
         allow_decrease: bool,
-        max_decrease_bps: u32,
+        _max_decrease_bps: u32, // Ignored - now uses owner-configured storage (#974)
     ) {
         Self::require_initialized(&env);
         let stored_agent: Address = env.storage().instance().get(&DataKey::Agent).unwrap();
@@ -7700,11 +7742,16 @@ impl NeuroWealthVault {
             // cannot unilaterally reduce user asset values.
             Self::require_is_owner(&env);
 
-            // Cap the per-call decrease (floor: 100 bps = 1%; ceiling: 10_000
-            // bps = 100%, so an oversized caller-supplied value saturates at
-            // "allow full decrease to zero" instead of computing a cap larger
-            // than old_total itself, which would make the check a no-op).
-            let effective_cap_bps = max_decrease_bps.clamp(100, Self::BPS_DENOMINATOR);
+            // Cap the per-call decrease using owner-configured storage (#974).
+            // The caller-supplied argument is ignored to prevent bypassing the cap.
+            // Floor: 100 bps (1%) to prevent disabling decreases entirely.
+            // Ceiling: 10_000 bps (100%) enforced by set_max_decrease_bps.
+            let stored_max_bps = env
+                .storage()
+                .instance()
+                .get(&DataKey::MaxDecreaseBps)
+                .unwrap_or(1000); // Default to 10% if not set
+            let effective_cap_bps = stored_max_bps.max(100).min(10_000);
             let max_decrease = old_total
                 .checked_mul(effective_cap_bps as i128)
                 .expect("vault: total available overflow")
@@ -10808,6 +10855,12 @@ impl NeuroWealthVault {
 
         if total_shares == 0 || total_assets == 0 {
             // Bootstrap: 1:1 mapping between assets and shares
+            // SECURITY: Reject when total_shares > 0 but total_assets == 0 (#973)
+            // This prevents dilution attack where new depositors get 1:1 shares
+            // while existing holders' shares are worthless.
+            if total_shares > 0 && total_assets == 0 {
+                panic_with_error!(env, VaultError::DepositRejectedZeroAssetsWithShares);
+            }
             assets
         } else {
             assets
